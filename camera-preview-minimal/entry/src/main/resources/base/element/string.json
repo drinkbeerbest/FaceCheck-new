@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Minimal front camera preview module."
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Minimal front camera preview ability."
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Camera Preview"
+    },
+    {
+      "name": "camera_permission_reason",
+      "value": "需要使用摄像头显示前置相机预览。"
+    }
+  ]
+}
