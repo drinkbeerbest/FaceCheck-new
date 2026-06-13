@@ -67,6 +67,7 @@ struct Index {
   @State records: AttendanceRecord[] = [];
   @State recordFilter: RecordFilter = 'today';
   @State showAllRecords: boolean = false;
+  @State recordStatusFilter: 'all' | 'success' | 'fail' = 'all';
   @State loginStudentId: string = '202440011987';
   @State loginPassword: string = '';
   @State loginError: string = '';
@@ -483,6 +484,22 @@ struct Index {
 
       this.RecordStatsCard()
 
+      if (this.recordStatusFilter !== 'all') {
+        Row({ space: 10 }) {
+          Text(this.recordStatusFilter === 'success' ? '已筛选：已到记录' : '已筛选：缺勤记录')
+            .fontSize(14)
+            .fontColor(this.recordStatusFilter === 'success' ? GREEN : RED)
+          Text('清除筛选')
+            .fontSize(13)
+            .fontColor(BLUE)
+            .onClick(() => {
+              this.recordStatusFilter = 'all';
+            })
+        }
+        .width('100%')
+        .padding({ top: 4, bottom: 4 })
+      }
+
       Column({ space: 12 }) {
         if (this.filteredRecords().length === 0) {
           this.EmptyState('当前筛选下暂无签到记录。')
@@ -511,8 +528,12 @@ struct Index {
   @Builder
   RecordStatsCard() {
     Row({ space: 16 }) {
-      this.StatCard('已到', `${this.stats().successCount}`, GREEN, GREEN_SOFT)
-      this.StatCard('缺勤', `${this.stats().failCount}`, RED, RED_SOFT)
+      this.StatCard('已到', `${this.stats().successCount}`, GREEN, GREEN_SOFT, () => {
+        this.recordStatusFilter = this.recordStatusFilter === 'success' ? 'all' : 'success';
+      })
+      this.StatCard('缺勤', `${this.stats().failCount}`, RED, RED_SOFT, () => {
+        this.recordStatusFilter = this.recordStatusFilter === 'fail' ? 'all' : 'fail';
+      })
       this.StatCard('出勤率', this.stats().rateText, BLUE, BLUE_SOFT)
     }
     .width('100%')
@@ -938,6 +959,7 @@ struct Index {
         .padding({ left: 24, right: 24, top: 20 })
 
         Blank()
+          .hitTestBehavior(HitTestMode.Transparent)
 
         Column({ space: 24 }) {
           Text(title)
@@ -962,12 +984,15 @@ struct Index {
               .height(closeShot ? 420 : 440)
               .borderRadius(closeShot ? 150 : 8)
               .border({ width: 2, color: this.cameraPreviewReady ? '#2D89FF' : '#7EAFFF' })
+              .hitTestBehavior(HitTestMode.Transparent)
             Column()
               .width(closeShot ? 250 : 330)
               .height(closeShot ? 330 : 300)
               .borderRadius(closeShot ? 120 : 8)
               .border({ width: 3, color: '#0D77FF' })
+              .hitTestBehavior(HitTestMode.Transparent)
           }
+          .hitTestBehavior(HitTestMode.Transparent)
 
           Text(message)
             .fontSize(18)
@@ -989,6 +1014,7 @@ struct Index {
         .alignItems(HorizontalAlign.Center)
 
         Blank()
+          .hitTestBehavior(HitTestMode.Transparent)
 
         Text(`${this.faceModeLabel}：参考人脸图仅保存在本机沙箱，清除后不会保留。`)
           .fontSize(13)
@@ -1007,21 +1033,25 @@ struct Index {
         .width('100%')
         .height('100%')
         .backgroundColor(DARK_BG)
+        .hitTestBehavior(HitTestMode.Transparent)
       if (this.cameraReady) {
         XComponent({ id: 'facecheck-camera-preview', type: XComponentType.SURFACE, controller: this.facePreviewController })
           .width('100%')
           .height('100%')
           .opacity(1)
+          .hitTestBehavior(HitTestMode.Transparent)
       }
       Column()
         .width('100%')
         .height('100%')
         .backgroundColor(this.cameraPreviewReady ? '#00142733' : (this.cameraReady ? '#00142799' : '#101722'))
+        .hitTestBehavior(HitTestMode.Transparent)
       Column()
         .width(closeShot ? 520 : 680)
         .height(closeShot ? 520 : 480)
         .borderRadius(closeShot ? 260 : 8)
         .border({ width: 1, color: this.cameraReady ? '#2D89FF' : '#304056' })
+        .hitTestBehavior(HitTestMode.Transparent)
     }
     .width('100%')
     .height('100%')
@@ -1520,7 +1550,11 @@ struct Index {
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
-      this.Pill(record.status === 'success' ? '成功' : '失败', record.status === 'success' ? GREEN : RED, record.status === 'success' ? GREEN_SOFT : RED_SOFT)
+      this.Pill(
+        record.status === 'success' ? '成功' : (this.isAbsenceRecord(record) ? '缺勤' : '签到失败'),
+        record.status === 'success' ? GREEN : RED,
+        record.status === 'success' ? GREEN_SOFT : RED_SOFT
+      )
     }
     .width('100%')
     .padding(16)
@@ -1530,7 +1564,7 @@ struct Index {
   }
 
   @Builder
-  StatCard(title: string, value: string, color: string, bg: string) {
+  StatCard(title: string, value: string, color: string, bg: string, onClick?: () => void) {
     Column({ space: 8 }) {
       Text(title)
         .fontSize(14)
@@ -1548,6 +1582,11 @@ struct Index {
     .border({ width: 1, color: bg })
     .borderRadius(8)
     .shadow(this.cardShadow())
+    .onClick(() => {
+      if (onClick) {
+        onClick();
+      }
+    })
   }
 
   @Builder
@@ -2311,7 +2350,7 @@ struct Index {
       this.livenessAction = `${result.message}（${source}）`;
       this.recognitionMessage = result.message;
       this.toast(result.message);
-      this.prepareFaceStage('recognition');
+      await this.prepareFaceStage('recognition');
     } else {
       this.faceStageStatus = 'failed';
       this.livenessAction = result.message;
@@ -2322,6 +2361,7 @@ struct Index {
 
   private async finishRecognition(): Promise<void> {
     this.faceStageStatus = 'detecting';
+    this.recognitionMessage = '正在拍摄并比对当前人脸';
     const context = getContext(this) as common.UIAbilityContext;
     const profile = this.store.faceProfile(this.currentStudentId);
     if (!profile || !profile.referenceImagePath) {
@@ -2386,6 +2426,7 @@ struct Index {
       this.flowPage = 'main';
       return;
     }
+
     this.faceStageStatus = 'success';
     this.recognitionMessage = result.message;
     if (result.similarity !== undefined) {
@@ -2468,14 +2509,44 @@ struct Index {
   }
 
   private filteredRecords(): AttendanceRecord[] {
+    let records: AttendanceRecord[];
     if (this.recordFilter === 'today') {
       const today = AttendanceService.dateKey(this.now());
-      return this.records.filter((record: AttendanceRecord) => record.displayDate === today || record.time.indexOf('今天') === 0);
+      records = this.records.filter((record: AttendanceRecord) => record.displayDate === today || record.time.indexOf('今天') === 0);
+    } else if (this.recordFilter === 'week') {
+      records = this.records.filter((record: AttendanceRecord) => record.displayDate === '本周' || record.displayDate === '昨天');
+    } else {
+      records = this.records.filter((record: AttendanceRecord) => record.displayDate !== AttendanceService.dateKey(this.now()) && record.displayDate !== '本周' && record.displayDate !== '昨天');
     }
-    if (this.recordFilter === 'week') {
-      return this.records.filter((record: AttendanceRecord) => record.displayDate === '本周' || record.displayDate === '昨天');
+    if (this.recordStatusFilter === 'success') {
+      records = records.filter((record: AttendanceRecord) => record.status === 'success');
+    } else if (this.recordStatusFilter === 'fail') {
+      // 只显示真正的缺勤记录（排除后续签到成功的失败尝试）
+      records = records.filter((record: AttendanceRecord) => {
+        if (!this.isAbsenceRecord(record)) {
+          return false;
+        }
+        const hasSuccess = this.records.some((r: AttendanceRecord) =>
+          r.status === 'success' && r.courseId === record.courseId && r.displayDate === record.displayDate
+        );
+        return !hasSuccess;
+      });
     }
-    return this.records.filter((record: AttendanceRecord) => record.displayDate !== AttendanceService.dateKey(this.now()) && record.displayDate !== '本周' && record.displayDate !== '昨天');
+    return records;
+  }
+
+  private isAbsenceRecord(record: AttendanceRecord): boolean {
+    if (record.status !== 'fail') {
+      return false;
+    }
+    if (record.absence === true) {
+      return true;
+    }
+    const message = record.message || '';
+    return message.indexOf('超过') >= 0 ||
+      message.indexOf('缺勤') >= 0 ||
+      message.indexOf('未签到') >= 0 ||
+      message.indexOf('签到已结束') >= 0;
   }
 
   private visibleRecords(): AttendanceRecord[] {

@@ -5,7 +5,7 @@ import interactiveLiveness from '@hms.ai.interactiveLiveness';
 import { FaceDemoService } from './FaceDemoService';
 import { FaceProfile, FaceRunMode, FaceServiceResult, VerificationMethod } from '../models/FaceCheckModels';
 
-const FACE_SIMILARITY_THRESHOLD = 0.75;
+const FACE_SIMILARITY_THRESHOLD = 0.60;
 const LIVENESS_TIMEOUT_MS = 90000;
 const INTERACTIVE_LIVENESS = 0;
 const SILENT_LIVENESS = 1;
@@ -117,8 +117,11 @@ class FaceVisionAdapter implements FaceAdapter {
       return FaceService.fail('缺少比对图像，请重新采集');
     }
     try {
+      console.info('FaceService', 'faceComparator.init() 开始初始化');
       await faceComparator.init();
+      console.info('FaceService', 'faceComparator.init() 初始化成功，开始比对');
       const result = await faceComparator.compareFaces({ pixelMap: referencePixelMap }, { pixelMap: currentPixelMap });
+      console.info('FaceService', `比对完成: isSamePerson=${result.isSamePerson}, similarity=${result.similarity}`);
       await faceComparator.release();
       const success = result.isSamePerson && result.similarity >= FACE_SIMILARITY_THRESHOLD;
       return {
@@ -132,7 +135,11 @@ class FaceVisionAdapter implements FaceAdapter {
         await faceComparator.release();
       } catch (releaseErr) {
       }
-      return FaceService.fail('人脸比对接口异常，请重试');
+      const error = err as BusinessError;
+      const errorCode = error.code !== undefined ? `${error.code}` : 'unknown';
+      const errorMessage = error.message !== undefined ? error.message : '';
+      console.error('FaceService', `人脸比对失败: 错误码=${errorCode}, 错误信息=${errorMessage}`);
+      return FaceService.fail(`人脸比对接口异常，请重试 (错误码: ${errorCode}, 错误信息: ${errorMessage})`);
     }
   }
 }
