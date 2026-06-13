@@ -3,20 +3,29 @@ import { promptAction } from '@kit.ArkUI';
 import image from '@ohos.multimedia.image';
 import photoAccessHelper from '@ohos.file.photoAccessHelper';
 import { SECTION_TIMES } from '../data/CourseData';
-import { ANONYMOUS_USER, AttendanceRecord, AttendanceStats, Course, CourseSignState, FaceServiceResult, FaceStageStatus, User, VerificationMethod } from '../models/FaceCheckModels';
+import { ANONYMOUS_USER, AttendanceRecord, AttendanceStats, BadgeItem, Course, CourseSignState, FaceServiceResult, FaceStageStatus, FeedbackItem, FeedbackType, FeedbackTypeOption, FEEDBACK_TYPE_OPTIONS, NotificationItem, type UpdateLogItem, type VersionInfo, User, VerificationMethod } from '../models/FaceCheckModels';
 import { AccountService } from '../services/AccountService';
 import { AttendanceService } from '../services/AttendanceService';
 import { CameraPermissionService } from '../services/CameraPermissionService';
 import { CourseService } from '../services/CourseService';
+import { BadgeService } from '../services/BadgeService';
 import { FaceCaptureService } from '../services/FaceCaptureService';
 import { FaceReferenceStore } from '../services/FaceReferenceStore';
 import { FaceService } from '../services/FaceService';
+import { FeedbackService } from '../services/FeedbackService';
+import { NotificationService } from '../services/NotificationService';
 import { PreferenceStore } from '../services/PreferenceStore';
+import { VersionService } from '../services/VersionService';
 
 type MainTab = 'home' | 'records' | 'profile' | 'settings';
-type FlowPage = 'main' | 'login' | 'register' | 'enroll' | 'liveness' | 'recognition' | 'schedule' | 'privacy';
+type FlowPage = 'main' | 'login' | 'register' | 'enroll' | 'liveness' | 'recognition' | 'schedule' | 'privacy' | 'courseEdit' | 'courseImport' | 'notifications' | 'badge' | 'feedback' | 'version';
 type RecordFilter = 'today' | 'week' | 'earlier';
 type IconName = 'house' | 'calendar-check' | 'person' | 'gear' | 'bell' | 'book' | 'award' | 'shield' | 'box-arrow-right' | 'person-circle' | 'lock' | 'card' | 'chevron-right' | 'camera' | 'eye' | 'check-circle' | 'x-circle' | 'clock';
+
+interface CourseTypeOption {
+  label: string;
+  value: string;
+}
 
 const BLUE = '#0B67D1';
 const BLUE_SOFT = '#E7F1FF';
@@ -31,6 +40,11 @@ const RED = '#F05252';
 const RED_SOFT = '#FFF0F0';
 const DARK_BG = '#101722';
 const DARK_CARD = '#182233';
+const COURSE_TYPE_OPTIONS: CourseTypeOption[] = [
+  { label: '理论', value: 'theory' },
+  { label: '实验', value: 'lab' },
+  { label: '实践', value: 'practice' }
+];
 
 @Entry
 @Component
@@ -41,6 +55,7 @@ struct Index {
   private livenessSerial: number = 0;
   private waitingLivenessResult: boolean = false;
   private facePreviewController: XComponentController = new XComponentController();
+  private lastBackPressTime: number = 0;
 
   @State currentTab: MainTab = 'home';
   @State flowPage: FlowPage = 'main';
@@ -72,12 +87,47 @@ struct Index {
   @State faceModeLabel: string = FaceService.modeLabel();
   @State demoSignMode: boolean = false;
   @State userAvatarPath: string = '';  // 用户自定义头像路径
+  // 课程编辑状态
+  @State editCourseId: string = '';
+  @State editCourseName: string = '';
+  @State editClassroom: string = '';
+  @State editTeacher: string = '';
+  @State editWeekDay: number = 1;
+  @State editSectionStart: number = 1;
+  @State editSectionEnd: number = 2;
+  @State editWeekRange: string = '1-16周';
+  @State editCourseType: string = 'theory';
+  @State editCourseError: string = '';
+  @State importJsonText: string = '';
+  @State importError: string = '';
+  // 通知状态
+  @State notifications: NotificationItem[] = [];
+  @State notificationUnreadCount: number = 0;
+  // 勋章状态
+  @State badges: BadgeItem[] = [];
+  // 反馈状态
+  @State feedbacks: FeedbackItem[] = [];
+  @State feedbackType: string = 'bug';
+  @State feedbackTitle: string = '';
+  @State feedbackContent: string = '';
+  @State feedbackContact: string = '';
+  @State feedbackError: string = '';
+  @State feedbackTab: string = 'list'; // 'list' | 'write'
+  @State versionInfo: VersionInfo | null = null;
+  @State checkingUpdate: boolean = false;
+  @State versionHasNew: boolean = false;
+  @State versionTab: string = 'current'; // 'current' | 'history'
 
   aboutToAppear(): void {
     const context = getContext(this) as common.UIAbilityContext;
     this.store.init(context).then(() => {
-      // 初始化 AccountService，加载持久化的账户数据
+      // 初始化 AccountService 和 CourseService，加载持久化数据
       AccountService.init(this.store);
+      CourseService.init(this.store);
+      NotificationService.init(this.store);
+      BadgeService.init(this.store);
+      FeedbackService.init(this.store);
+      VersionService.init(this.store);
 
       this.loggedIn = this.store.isLoggedIn();
       this.currentStudentId = this.store.currentStudentId();
@@ -91,7 +141,76 @@ struct Index {
       if (this.loggedIn && this.currentStudentId) {
         this.userAvatarPath = AccountService.getAvatarPath(this.currentStudentId) || '';
       }
+
+      // 加载通知
+      this.loadNotifications();
+
+      // 加载勋章
+      this.loadBadges();
     });
+  }
+
+  private loadBadges(): void {
+    if (this.loggedIn && this.currentStudentId.length > 0) {
+      this.badges = BadgeService.loadBadges(this.currentStudentId);
+    } else {
+      this.badges = [];
+    }
+  }
+
+  onBackPress(): boolean {
+    if (this.flowPage !== 'main') {
+      const parent: FlowPage | null = this.getParentPage(this.flowPage);
+      if (parent !== null) {
+        this.flowPage = parent;
+      } else {
+        this.flowPage = 'main';
+        this.currentTab = 'home';
+      }
+      return true;
+    }
+
+    const now: number = Date.now();
+    if (now - this.lastBackPressTime <= 2000) {
+      return false;
+    }
+    this.lastBackPressTime = now;
+    this.toast('再按一次退出');
+    return true;
+  }
+
+  private getParentPage(page: FlowPage): FlowPage | null {
+    if (page === 'courseEdit' || page === 'courseImport') {
+      return 'schedule';
+    }
+    if (page === 'schedule' || page === 'notifications' || page === 'badge' || page === 'privacy' || page === 'feedback') {
+      return 'main';
+    }
+    if (page === 'login' || page === 'register' || page === 'enroll' || page === 'liveness' || page === 'recognition') {
+      return 'main';
+    }
+    return null;
+  }
+
+  private loadNotifications(): void {
+    if (this.loggedIn && this.currentStudentId.length > 0) {
+      let items: NotificationItem[] = NotificationService.loadNotifications(this.currentStudentId);
+      if (items.length === 0) {
+        items = NotificationService.seedNotifications(this.currentStudentId);
+      }
+      this.notifications = items;
+      this.notificationUnreadCount = NotificationService.unreadCount(this.currentStudentId);
+    } else {
+      this.notifications = [];
+      this.notificationUnreadCount = 0;
+    }
+  }
+
+  private refreshNotificationState(): void {
+    if (this.loggedIn && this.currentStudentId.length > 0) {
+      this.notifications = NotificationService.loadNotifications(this.currentStudentId);
+      this.notificationUnreadCount = NotificationService.unreadCount(this.currentStudentId);
+    }
   }
 
   onPageShow(): void {
@@ -118,6 +237,18 @@ struct Index {
         this.SchedulePage()
       } else if (this.flowPage === 'privacy') {
         this.PrivacyPage()
+      } else if (this.flowPage === 'courseEdit') {
+        this.CourseEditPage()
+      } else if (this.flowPage === 'courseImport') {
+        this.CourseImportPage()
+      } else if (this.flowPage === 'notifications') {
+        this.NotificationsPage()
+      } else if (this.flowPage === 'badge') {
+        this.BadgePage()
+      } else if (this.flowPage === 'feedback') {
+        this.FeedbackPage()
+      } else if (this.flowPage === 'version') {
+        this.VersionPage()
       } else {
         this.MainShell()
       }
@@ -167,7 +298,7 @@ struct Index {
           .fontColor(BLUE)
       }
 
-      this.IconButton('bell', '通知', () => this.toast('暂无新消息'))
+      this.NotificationButton()
     }
     .width('100%')
     .height(72)
@@ -583,7 +714,7 @@ struct Index {
           .fontSize(16)
           .fontColor(this.secondaryText())
           .width('100%')
-        this.SettingsRow('bell', '通知管理', '课程开始前提醒', false)
+        this.SettingsRow('bell', '通知管理', '课程开始前提醒', false, () => this.openNotifications())
         this.SettingsToggleRow()
         this.DemoSignWindowRow()
       }
@@ -596,8 +727,8 @@ struct Index {
           .fontSize(16)
           .fontColor(this.secondaryText())
           .width('100%')
-        this.SettingsRow('check-circle', '版本更新', 'v2.1.0', false)
-        this.SettingsRow('person', '反馈建议', '联系校园 IT 支持', false)
+        this.SettingsRow('check-circle', '版本更新', this.versionSubtitle(), false, () => this.openVersion())
+        this.SettingsRow('person', '反馈建议', '提交反馈与查看历史', false, () => this.openFeedback())
       }
       .width('100%')
 
@@ -656,10 +787,10 @@ struct Index {
 
         Divider().color(LINE)
         Row({ space: 24 }) {
-          Text('遇到问题？联系校园 IT 支持')
+          Text('遇到问题？提交反馈')
             .fontSize(15)
             .fontColor(BLUE)
-            .onClick(() => this.toast('请联系校园IT支持：support@campus.edu'))
+            .onClick(() => this.toast('登录后可在设置页提交反馈建议'))
           Text('还没有账号？立即注册')
             .fontSize(15)
             .fontColor(BLUE)
@@ -902,9 +1033,34 @@ struct Index {
       this.AuthHeader()
       Scroll() {
         Column({ space: 16 }) {
-          this.SectionTitle('我的课表', '2025-2026 学年第 1 学期')
+          Row() {
+            this.SectionTitle('我的课表', '2025-2026 学年第 1 学期')
+            Row({ space: 10 }) {
+              Button('导入')
+                .fontSize(14)
+                .height(36)
+                .backgroundColor(BLUE_SOFT)
+                .fontColor(BLUE)
+                .onClick(() => {
+                  this.importJsonText = '';
+                  this.importError = '';
+                  this.flowPage = 'courseImport';
+                })
+              Button('添加')
+                .fontSize(14)
+                .height(36)
+                .backgroundColor(BLUE)
+                .fontColor(Color.White)
+                .onClick(() => {
+                  this.resetCourseEditForm();
+                  this.flowPage = 'courseEdit';
+                })
+            }
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.SpaceBetween)
           this.ScheduleTable()
-          this.SectionTitle('课程列表', '手机窄屏可优先查看此列表')
+          this.SectionTitle('课程列表', '长按可编辑或删除')
           ForEach(CourseService.all(), (course: Course) => {
             this.CourseRow(course)
           }, (course: Course) => course.courseId)
@@ -1086,6 +1242,37 @@ struct Index {
   }
 
   @Builder
+  NotificationButton() {
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Row({ space: 8 }) {
+        this.IconBox('bell', 28, 22, MUTED)
+        Text('通知')
+          .fontSize(14)
+          .fontColor(MUTED)
+      }
+      .height(44)
+      .padding({ left: 14, right: 14 })
+      .borderRadius(8)
+      .backgroundColor(this.surfaceAlt())
+      .onClick(() => this.openNotifications())
+
+      if (this.notificationUnreadCount > 0) {
+        Text(`${this.notificationUnreadCount}`)
+          .fontSize(11)
+          .fontColor('#FFFFFF')
+          .fontWeight(FontWeight.Bold)
+          .width(18)
+          .height(18)
+          .textAlign(TextAlign.Center)
+          .backgroundColor(RED)
+          .borderRadius(9)
+          .margin({ top: -6, right: -6 })
+      }
+    }
+    .height(44)
+  }
+
+  @Builder
   DefaultAvatar(size: number) {
     Stack() {
       if (this.loggedIn && this.userAvatarPath && this.userAvatarPath.length > 0) {
@@ -1177,6 +1364,12 @@ struct Index {
     .padding(16)
     .backgroundColor(this.surfaceAlt())
     .borderRadius(8)
+    .gesture(
+      LongPressGesture({ duration: 500 })
+        .onAction(() => {
+          this.showCourseActionDialog(course);
+        })
+    )
   }
 
   @Builder
@@ -1400,7 +1593,7 @@ struct Index {
   }
 
   @Builder
-  SettingsRow(icon: IconName, title: string, description: string, disabled: boolean) {
+  SettingsRow(icon: IconName, title: string, description: string, disabled: boolean, onAction?: () => void) {
     Row({ space: 14 }) {
       this.IconBox(icon, 40, 30, BLUE)
       Column({ space: 4 }) {
@@ -1426,7 +1619,13 @@ struct Index {
     .backgroundColor(this.surface())
     .borderRadius(8)
     .shadow(this.cardShadow())
-    .onClick(() => this.toast(`${title}将在后续版本开放`))
+    .onClick(() => {
+      if (onAction) {
+        onAction();
+      } else {
+        this.toast(`${title}将在后续版本开放`);
+      }
+    })
   }
 
   @Builder
@@ -1606,7 +1805,13 @@ struct Index {
     await this.store.setCurrentStudentId(account.studentId);
     this.flowPage = 'main';
     this.currentTab = 'home';
-    this.toast('登录成功');
+    this.loadNotifications();
+    this.loadBadges();
+    if (BadgeService.checkLoginBadge(account.studentId)) {
+      this.toast('解锁勋章：初来乍到');
+    } else {
+      this.toast('登录成功');
+    }
   }
 
   private async register(): Promise<void> {
@@ -1682,6 +1887,7 @@ struct Index {
     
     this.flowPage = 'main';
     this.currentTab = 'home';
+    this.loadNotifications();
     this.toast('注册成功，已自动登录');
   }
 
@@ -1969,6 +2175,9 @@ struct Index {
     const record = AttendanceService.createFailureRecord(this.user.userId, course, message, this.now(), method);
     this.records = [record, ...this.records];
     await this.store.saveRecords(this.currentStudentId, this.records);
+    const notif = NotificationService.createSignFailedNotification(this.currentStudentId, course.courseName, course.courseId, message);
+    NotificationService.addNotification(this.currentStudentId, notif);
+    this.refreshNotificationState();
   }
 
   private async finishEnroll(): Promise<void> {
@@ -2013,7 +2222,11 @@ struct Index {
       this.user = this.withFaceState(this.user, true);
       this.stopFacePreview();
       this.flowPage = 'main';
-      this.toast('人脸录入成功');
+      if (BadgeService.checkFaceEnrolledBadge(this.currentStudentId)) {
+        this.toast('解锁勋章：面貌一新');
+      } else {
+        this.toast('人脸录入成功');
+      }
     } else {
       if (referencePath.length > 0) {
         await FaceReferenceStore.clearReference(referencePath);
@@ -2041,8 +2254,15 @@ struct Index {
       this.flowPage = 'schedule';
     } else if (target === 'privacy') {
       this.flowPage = 'privacy';
+    } else if (target === 'badge') {
+      if (!this.loggedIn) {
+        this.toast('请先登录');
+        return;
+      }
+      this.loadBadges();
+      this.flowPage = 'badge';
     } else {
-      this.toast('勋章页将在后续版本开放');
+      this.toast('将在后续版本开放');
     }
   }
 
@@ -2159,6 +2379,9 @@ struct Index {
       const failRecord = AttendanceService.createFailureRecord(this.user.userId, course, message, this.now(), result.method, true);
       this.records = [failRecord, ...this.records];
       await this.store.saveRecords(this.currentStudentId, this.records);
+      const failNotif = NotificationService.createSignFailedNotification(this.currentStudentId, course.courseName, course.courseId, message);
+      NotificationService.addNotification(this.currentStudentId, failNotif);
+      this.refreshNotificationState();
       this.toast(message);
       this.flowPage = 'main';
       return;
@@ -2173,11 +2396,33 @@ struct Index {
     record.message = result.message;
     this.records = [record, ...this.records];
     await this.store.saveRecords(this.currentStudentId, this.records);
+    const successNotif = NotificationService.createSignSuccessNotification(this.currentStudentId, course.courseName, course.courseId);
+    NotificationService.addNotification(this.currentStudentId, successNotif);
+    this.refreshNotificationState();
+
+    const unlockedBadges = BadgeService.checkSignBadges(this.currentStudentId, this.records, CourseService.all());
+    if (unlockedBadges.length > 0) {
+      this.loadBadges();
+      const badgeNames: string[] = [];
+      for (let i = 0; i < unlockedBadges.length; i++) {
+        const b = BadgeService.loadBadges(this.currentStudentId).find((badge: BadgeItem) => badge.type === unlockedBadges[i]);
+        if (b) {
+          badgeNames.push(b.title);
+        }
+      }
+      if (badgeNames.length > 0) {
+        this.toast(`解锁勋章：${badgeNames.join('、')}`);
+      } else {
+        this.toast('签到成功');
+      }
+    } else {
+      this.toast('签到成功');
+    }
+
     this.activeCourseId = '';
     this.stopFacePreview();
     this.flowPage = 'main';
     this.currentTab = 'home';
-    this.toast('签到成功');
   }
 
   private armCaptureWatchdog(message: string): number {
@@ -2393,6 +2638,62 @@ struct Index {
     return 'M8 3.5a.5.5 0 0 1 .5.5v4l2.5 1.5a.5.5 0 0 1-.5.866l-2.75-1.65A.5.5 0 0 1 7.5 8V4A.5.5 0 0 1 8 3.5M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16';
   }
 
+  private openNotifications(): void {
+    if (!this.loggedIn) {
+      this.toast('请先登录');
+      return;
+    }
+    this.loadNotifications();
+    this.flowPage = 'notifications';
+  }
+
+  private openFeedback(): void {
+    if (!this.loggedIn) {
+      this.toast('请先登录');
+      return;
+    }
+    this.loadFeedbacks();
+    this.feedbackTab = 'list';
+    this.flowPage = 'feedback';
+  }
+
+  private loadFeedbacks(): void {
+    this.feedbacks = FeedbackService.loadFeedbacks(this.currentStudentId);
+  }
+
+  private openVersion(): void {
+    this.versionTab = 'current';
+    this.versionInfo = null;
+    this.versionHasNew = false;
+    this.flowPage = 'version';
+  }
+
+  private async checkUpdate(): Promise<void> {
+    if (this.checkingUpdate) {
+      return;
+    }
+    this.checkingUpdate = true;
+    try {
+      const info = await VersionService.checkUpdate();
+      this.versionInfo = info;
+      this.versionHasNew = info !== null;
+      if (!info) {
+        this.toast('当前已是最新版本');
+      }
+    } catch (err) {
+      this.toast('检查更新失败，请稍后重试');
+    } finally {
+      this.checkingUpdate = false;
+    }
+  }
+
+  private versionSubtitle(): string {
+    if (this.versionHasNew && this.versionInfo) {
+      return `发现新版本 v${this.versionInfo.latestVersion}`;
+    }
+    return `v${VersionService.getCurrentVersion()}`;
+  }
+
   private toast(message: string): void {
     try {
       promptAction.showToast({ message, duration: 1800 });
@@ -2427,5 +2728,1350 @@ struct Index {
       offsetX: 0,
       offsetY: 8
     };
+  }
+
+  // ========== 课程编辑/导入功能 ==========
+
+  private showCourseActionDialog(course: Course): void {
+    promptAction.showActionMenu({
+      title: course.courseName,
+      buttons: [
+        { text: '编辑', color: '#2D89FF' },
+        { text: '删除', color: '#E53935' },
+        { text: '取消', color: '#888888' }
+      ]
+    }).then((selectResult: promptAction.ActionMenuSuccessResponse) => {
+      if (selectResult.index === 0) {
+        // 编辑
+        this.editCourseId = course.courseId;
+        this.editCourseName = course.courseName;
+        this.editClassroom = course.classroom;
+        this.editTeacher = course.teacher;
+        this.editWeekDay = course.weekDay;
+        this.editSectionStart = course.sectionStart;
+        this.editSectionEnd = course.sectionEnd;
+        this.editWeekRange = course.weekRange;
+        this.editCourseType = course.type;
+        this.editCourseError = '';
+        this.flowPage = 'courseEdit';
+      } else if (selectResult.index === 1) {
+        // 删除
+        CourseService.deleteCourse(course.courseId);
+        this.toast('课程已删除');
+      }
+    });
+  }
+
+  private resetCourseEditForm(): void {
+    this.editCourseId = '';
+    this.editCourseName = '';
+    this.editClassroom = '';
+    this.editTeacher = '';
+    this.editWeekDay = 1;
+    this.editSectionStart = 1;
+    this.editSectionEnd = 2;
+    this.editWeekRange = '1-16周';
+    this.editCourseType = 'theory';
+    this.editCourseError = '';
+  }
+
+  private saveCourse(): void {
+    if (this.editCourseName.trim().length === 0) {
+      this.editCourseError = '课程名称不能为空';
+      return;
+    }
+    if (this.editClassroom.trim().length === 0) {
+      this.editCourseError = '教室不能为空';
+      return;
+    }
+    if (this.editTeacher.trim().length === 0) {
+      this.editCourseError = '教师不能为空';
+      return;
+    }
+    if (this.editSectionStart > this.editSectionEnd) {
+      this.editCourseError = '开始节次不能大于结束节次';
+      return;
+    }
+
+    const startTime: string = SECTION_TIMES[this.editSectionStart]?.split('-')[0] || '08:30';
+    const endTime: string = SECTION_TIMES[this.editSectionEnd]?.split('-')[1] || '09:15';
+    const sectionStr: string = `${this.editSectionStart}-${this.editSectionEnd}节`;
+
+    const course: Course = {
+      courseId: this.editCourseId || `course-${Date.now()}`,
+      courseName: this.editCourseName.trim(),
+      classroom: this.editClassroom.trim(),
+      teacher: this.editTeacher.trim(),
+      weekDay: this.editWeekDay,
+      section: sectionStr,
+      sectionStart: this.editSectionStart,
+      sectionEnd: this.editSectionEnd,
+      startTime: startTime,
+      endTime: endTime,
+      weekRange: this.editWeekRange.trim(),
+      type: this.editCourseType as 'theory' | 'lab' | 'practice'
+    };
+
+    if (this.editCourseId) {
+      CourseService.updateCourse(this.editCourseId, course);
+      this.toast('课程已更新');
+    } else {
+      CourseService.addCourse(course);
+      this.toast('课程已添加');
+    }
+    this.flowPage = 'schedule';
+  }
+
+  private importCoursesFromJson(): void {
+    try {
+      const parsed: Object = JSON.parse(this.importJsonText);
+      if (!Array.isArray(parsed)) {
+        this.importError = '导入数据必须是课程数组';
+        return;
+      }
+      const courses: Course[] = (parsed as Course[]).filter((item: Course) => {
+        return item.courseId && item.courseName && item.weekDay !== undefined;
+      });
+      if (courses.length === 0) {
+        this.importError = '未找到有效的课程数据';
+        return;
+      }
+      CourseService.saveCourses(courses);
+      this.toast(`成功导入 ${courses.length} 门课程`);
+      this.flowPage = 'schedule';
+    } catch (err) {
+      this.importError = 'JSON 格式错误，请检查输入';
+    }
+  }
+
+  @Builder
+  CourseEditPage() {
+    Column() {
+      this.AuthHeader()
+      Scroll() {
+        Column({ space: 18 }) {
+          Text(this.editCourseId ? '编辑课程' : '添加课程')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.primaryText())
+            .width('100%')
+
+          this.InputBlock('book', '课程名称', '例如：数据结构', this.editCourseName, false, (input: string) => {
+            this.editCourseName = input;
+            this.editCourseError = '';
+          })
+          this.InputBlock('card', '教室', '例如：教A101', this.editClassroom, false, (input: string) => {
+            this.editClassroom = input;
+            this.editCourseError = '';
+          })
+          this.InputBlock('person-circle', '教师', '例如：张三', this.editTeacher, false, (input: string) => {
+            this.editTeacher = input;
+            this.editCourseError = '';
+          })
+
+          // 星期选择
+          Column({ space: 8 }) {
+            Text('上课星期')
+              .fontSize(16)
+              .fontColor(this.primaryText())
+              .width('100%')
+            Row({ space: 8 }) {
+              ForEach([1, 2, 3, 4, 5, 6, 0], (day: number) => {
+                Text(CourseService.weekdayLabel(day))
+                  .fontSize(13)
+                  .fontWeight(this.editWeekDay === day ? FontWeight.Bold : FontWeight.Normal)
+                  .fontColor(this.editWeekDay === day ? '#FFFFFF' : this.secondaryText())
+                  .textAlign(TextAlign.Center)
+                  .width(40)
+                  .height(36)
+                  .backgroundColor(this.editWeekDay === day ? BLUE : this.surfaceAlt())
+                  .borderRadius(8)
+                  .onClick(() => {
+                    this.editWeekDay = day;
+                  })
+              }, (day: number) => `${day}`)
+            }
+            .width('100%')
+          }
+          .width('100%')
+
+          // 节次选择
+          Column({ space: 8 }) {
+            Text('开始节次')
+              .fontSize(16)
+              .fontColor(this.primaryText())
+              .width('100%')
+            Row({ space: 8 }) {
+              ForEach([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], (section: number) => {
+                Text(`${section}`)
+                  .fontSize(13)
+                  .fontWeight(this.editSectionStart === section ? FontWeight.Bold : FontWeight.Normal)
+                  .fontColor(this.editSectionStart === section ? '#FFFFFF' : this.secondaryText())
+                  .textAlign(TextAlign.Center)
+                  .width(36)
+                  .height(36)
+                  .backgroundColor(this.editSectionStart === section ? BLUE : this.surfaceAlt())
+                  .borderRadius(8)
+                  .onClick(() => {
+                    this.editSectionStart = section;
+                    if (this.editSectionEnd < section) {
+                      this.editSectionEnd = section;
+                    }
+                  })
+              }, (section: number) => `${section}`)
+            }
+            .width('100%')
+          }
+          .width('100%')
+
+          Column({ space: 8 }) {
+            Text('结束节次')
+              .fontSize(16)
+              .fontColor(this.primaryText())
+              .width('100%')
+            Row({ space: 8 }) {
+              ForEach([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], (section: number) => {
+                Text(`${section}`)
+                  .fontSize(13)
+                  .fontWeight(this.editSectionEnd === section ? FontWeight.Bold : FontWeight.Normal)
+                  .fontColor(this.editSectionEnd === section ? '#FFFFFF' : this.secondaryText())
+                  .textAlign(TextAlign.Center)
+                  .width(36)
+                  .height(36)
+                  .backgroundColor(this.editSectionEnd === section ? BLUE : this.surfaceAlt())
+                  .borderRadius(8)
+                  .onClick(() => {
+                    this.editSectionEnd = section;
+                  })
+              }, (section: number) => `${section}`)
+            }
+            .width('100%')
+          }
+          .width('100%')
+
+          this.InputBlock('award', '周次', '例如：1-16周', this.editWeekRange, false, (input: string) => {
+            this.editWeekRange = input;
+          })
+
+          // 课程类型
+          Column({ space: 8 }) {
+            Text('课程类型')
+              .fontSize(16)
+              .fontColor(this.primaryText())
+              .width('100%')
+            Row({ space: 10 }) {
+              ForEach(COURSE_TYPE_OPTIONS, (type: CourseTypeOption) => {
+                Text(type.label)
+                  .fontSize(14)
+                  .fontWeight(this.editCourseType === type.value ? FontWeight.Bold : FontWeight.Normal)
+                  .fontColor(this.editCourseType === type.value ? '#FFFFFF' : this.secondaryText())
+                  .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+                  .backgroundColor(this.editCourseType === type.value ? BLUE : this.surfaceAlt())
+                  .borderRadius(8)
+                  .onClick(() => {
+                    this.editCourseType = type.value;
+                  })
+              }, (type: CourseTypeOption) => type.value)
+            }
+          }
+          .width('100%')
+
+          if (this.editCourseError.length > 0) {
+            Text(this.editCourseError)
+              .fontSize(14)
+              .fontColor(RED)
+              .width('100%')
+          }
+
+          Button(this.editCourseId ? '保存修改' : '添加课程')
+            .height(52)
+            .width('100%')
+            .fontSize(17)
+            .fontWeight(FontWeight.Medium)
+            .backgroundColor(BLUE)
+            .fontColor(Color.White)
+            .borderRadius(8)
+            .onClick(() => this.saveCourse())
+
+          Button('取消')
+            .height(48)
+            .width('100%')
+            .fontSize(16)
+            .backgroundColor(this.surfaceAlt())
+            .fontColor(this.secondaryText())
+            .borderRadius(8)
+            .onClick(() => {
+              this.flowPage = 'schedule';
+            })
+        }
+        .width('100%')
+        .padding({ left: 24, right: 24, top: 20, bottom: 40 })
+        .constraintSize({ maxWidth: 560 })
+      }
+      .layoutWeight(1)
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(this.pageBg())
+  }
+
+  @Builder
+  CourseImportPage() {
+    Column() {
+      this.AuthHeader()
+      Scroll() {
+        Column({ space: 18 }) {
+          Text('导入课表')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.primaryText())
+            .width('100%')
+
+          Text('将课程 JSON 数组粘贴到下方：')
+            .fontSize(14)
+            .fontColor(this.secondaryText())
+            .width('100%')
+
+          TextArea({ text: this.importJsonText })
+            .height(300)
+            .fontSize(14)
+            .backgroundColor(this.surfaceAlt())
+            .borderRadius(8)
+            .padding(12)
+            .onChange((value: string) => {
+              this.importJsonText = value;
+              this.importError = '';
+            })
+
+          if (this.importError.length > 0) {
+            Text(this.importError)
+              .fontSize(14)
+              .fontColor(RED)
+              .width('100%')
+          }
+
+          Button('导入')
+            .height(52)
+            .width('100%')
+            .fontSize(17)
+            .fontWeight(FontWeight.Medium)
+            .backgroundColor(BLUE)
+            .fontColor(Color.White)
+            .borderRadius(8)
+            .onClick(() => this.importCoursesFromJson())
+
+          Button('重置为默认课表')
+            .height(48)
+            .width('100%')
+            .fontSize(16)
+            .backgroundColor(RED_SOFT)
+            .fontColor(RED)
+            .borderRadius(8)
+            .onClick(() => {
+              CourseService.resetToDefault();
+              this.toast('已重置为默认课表');
+              this.flowPage = 'schedule';
+            })
+
+          Button('取消')
+            .height(48)
+            .width('100%')
+            .fontSize(16)
+            .backgroundColor(this.surfaceAlt())
+            .fontColor(this.secondaryText())
+            .borderRadius(8)
+            .onClick(() => {
+              this.flowPage = 'schedule';
+            })
+
+          Column({ space: 6 }) {
+            Text('JSON 格式示例：')
+              .fontSize(14)
+              .fontColor(this.primaryText())
+              .width('100%')
+            Text(`[\n  {\n    "courseId": "course-1",\n    "courseName": "数据结构",\n    "classroom": "教A101",\n    "teacher": "张三",\n    "weekDay": 1,\n    "section": "1-2节",\n    "sectionStart": 1,\n    "sectionEnd": 2,\n    "startTime": "08:30",\n    "endTime": "10:05",\n    "weekRange": "1-16周",\n    "type": "theory"\n  }\n]`)
+              .fontSize(11)
+              .fontColor(this.secondaryText())
+              .width('100%')
+              .padding(10)
+              .backgroundColor(this.surfaceAlt())
+              .borderRadius(8)
+          }
+          .width('100%')
+        }
+        .width('100%')
+        .padding({ left: 24, right: 24, top: 20, bottom: 40 })
+        .constraintSize({ maxWidth: 560 })
+      }
+      .layoutWeight(1)
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(this.pageBg())
+  }
+
+  @Builder
+  NotificationsPage() {
+    Column() {
+      // Header
+      Row({ space: 12 }) {
+        Button() {
+          Text('<')
+            .fontSize(22)
+            .fontColor(this.primaryText())
+        }
+        .width(44)
+        .height(44)
+        .backgroundColor('transparent')
+        .onClick(() => {
+          this.flowPage = 'main';
+        })
+
+        Text('通知中心')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryText())
+          .layoutWeight(1)
+
+        if (this.notifications.length > 0) {
+          Text('全部已读')
+            .fontSize(14)
+            .fontColor(BLUE)
+            .onClick(() => {
+              NotificationService.markAllAsRead(this.currentStudentId);
+              this.refreshNotificationState();
+              this.toast('已全部标记为已读');
+            })
+        }
+      }
+      .width('100%')
+      .height(56)
+      .padding({ left: 16, right: 16 })
+      .backgroundColor(this.surface())
+
+      // Actions
+      if (this.notifications.length > 0) {
+        Row() {
+          Text(`${this.notificationUnreadCount} 条未读`)
+            .fontSize(13)
+            .fontColor(this.secondaryText())
+          Blank()
+          Text('清空全部')
+            .fontSize(13)
+            .fontColor(RED)
+            .onClick(() => {
+              NotificationService.clearAllNotifications(this.currentStudentId);
+              this.refreshNotificationState();
+              this.toast('已清空全部通知');
+            })
+        }
+        .width('100%')
+        .padding({ left: 24, right: 24, top: 12, bottom: 8 })
+      }
+
+      if (this.notifications.length === 0) {
+        Column({ space: 12 }) {
+          this.IconBox('bell', 64, 48, MUTED)
+          Text('暂无通知')
+            .fontSize(16)
+            .fontColor(this.secondaryText())
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      } else {
+        Scroll() {
+          Column({ space: 10 }) {
+            ForEach(this.notifications, (item: NotificationItem) => {
+              Column({ space: 6 }) {
+                Row({ space: 10 }) {
+                  Text(NotificationService.typeLabel(item.type))
+                    .fontSize(11)
+                    .fontColor(NotificationService.typeColor(item.type))
+                    .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+                    .backgroundColor(NotificationService.typeBgColor(item.type))
+                    .borderRadius(4)
+
+                  Text(item.title)
+                    .fontSize(15)
+                    .fontWeight(item.read ? FontWeight.Normal : FontWeight.Bold)
+                    .fontColor(this.primaryText())
+                    .layoutWeight(1)
+
+                  if (!item.read) {
+                    Row()
+                      .width(8)
+                      .height(8)
+                      .backgroundColor(RED)
+                      .borderRadius(4)
+                  }
+                }
+                .width('100%')
+
+                Text(item.content)
+                  .fontSize(13)
+                  .fontColor(this.secondaryText())
+                  .width('100%')
+
+                Text(NotificationService.formatTime(item.timestamp))
+                  .fontSize(11)
+                  .fontColor(MUTED)
+                  .width('100%')
+              }
+              .width('100%')
+              .padding(14)
+              .backgroundColor(item.read ? this.surface() : BLUE_SOFT)
+              .borderRadius(8)
+              .shadow(this.cardShadow())
+              .onClick(() => {
+                if (!item.read) {
+                  NotificationService.markAsRead(this.currentStudentId, item.id);
+                  this.refreshNotificationState();
+                }
+              })
+              .gesture(
+                LongPressGesture({ duration: 500 })
+                  .onAction(() => {
+                    this.showNotificationActionDialog(item);
+                  })
+              )
+            }, (item: NotificationItem) => item.id)
+          }
+          .width('100%')
+          .padding({ left: 24, right: 24, top: 12, bottom: 40 })
+          .constraintSize({ maxWidth: 980 })
+        }
+        .layoutWeight(1)
+        .scrollable(ScrollDirection.Vertical)
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(this.pageBg())
+  }
+
+  private showNotificationActionDialog(item: NotificationItem): void {
+    const readLabel: string = item.read ? '标记为未读' : '标记为已读';
+    promptAction.showActionMenu({
+      title: item.title,
+      buttons: [
+        { text: readLabel, color: '#2D89FF' },
+        { text: '删除', color: '#E53935' },
+        { text: '取消', color: '#888888' }
+      ]
+    }).then((selectResult: promptAction.ActionMenuSuccessResponse) => {
+      if (selectResult.index === 0) {
+        if (item.read) {
+          const allItems: NotificationItem[] = NotificationService.loadNotifications(this.currentStudentId);
+          const updated: NotificationItem[] = [];
+          for (let i = 0; i < allItems.length; i++) {
+            if (allItems[i].id === item.id) {
+              updated.push({
+                id: allItems[i].id,
+                type: allItems[i].type,
+                title: allItems[i].title,
+                content: allItems[i].content,
+                timestamp: allItems[i].timestamp,
+                read: false,
+                studentId: allItems[i].studentId,
+                courseId: allItems[i].courseId
+              });
+            } else {
+              updated.push(allItems[i]);
+            }
+          }
+          NotificationService.saveNotifications(this.currentStudentId, updated);
+          this.toast('已标记为未读');
+        } else {
+          NotificationService.markAsRead(this.currentStudentId, item.id);
+          this.toast('已标记为已读');
+        }
+        this.refreshNotificationState();
+      } else if (selectResult.index === 1) {
+        NotificationService.deleteNotification(this.currentStudentId, item.id);
+        this.toast('通知已删除');
+        this.refreshNotificationState();
+      }
+    });
+  }
+
+  @Builder
+  BadgePage() {
+    Column() {
+      Row({ space: 12 }) {
+        Button() {
+          Text('<')
+            .fontSize(22)
+            .fontColor(this.primaryText())
+        }
+        .width(44)
+        .height(44)
+        .backgroundColor('transparent')
+        .onClick(() => {
+          this.flowPage = 'main';
+        })
+
+        Text('我的勋章')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryText())
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .height(56)
+      .padding({ left: 16, right: 16 })
+      .backgroundColor(this.surface())
+
+      Scroll() {
+        Column({ space: 16 }) {
+          Column({ space: 6 }) {
+            Text(`${this.badges.filter((b: BadgeItem) => b.unlocked).length} / ${this.badges.length}`)
+              .fontSize(32)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(BLUE)
+            Text('已解锁勋章')
+              .fontSize(14)
+              .fontColor(this.secondaryText())
+          }
+          .width('100%')
+          .padding({ top: 20, bottom: 10 })
+          .alignItems(HorizontalAlign.Center)
+
+          Column({ space: 10 }) {
+            ForEach(this.badges, (badge: BadgeItem) => {
+              Row({ space: 14 }) {
+                Stack({ alignContent: Alignment.Center }) {
+                  this.AppIcon(badge.icon as IconName, 28, badge.unlocked ? BLUE : MUTED)
+                }
+                .width(52)
+                .height(52)
+                .backgroundColor(badge.unlocked ? BLUE_SOFT : this.surfaceAlt())
+                .borderRadius(12)
+
+                Column({ space: 4 }) {
+                  Row({ space: 8 }) {
+                    Text(badge.title)
+                      .fontSize(16)
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor(badge.unlocked ? this.primaryText() : MUTED)
+
+                    if (badge.unlocked) {
+                      Text('已解锁')
+                        .fontSize(11)
+                        .fontColor(GREEN)
+                        .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                        .backgroundColor(GREEN_SOFT)
+                        .borderRadius(4)
+                    } else {
+                      Text('未解锁')
+                        .fontSize(11)
+                        .fontColor(MUTED)
+                        .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                        .backgroundColor(this.surfaceAlt())
+                        .borderRadius(4)
+                    }
+                  }
+
+                  Text(badge.description)
+                    .fontSize(13)
+                    .fontColor(this.secondaryText())
+                    .width('100%')
+
+                  if (!badge.unlocked && badge.progress !== undefined && badge.target !== undefined && badge.target > 1) {
+                    Row({ space: 6 }) {
+                      Row() {
+                        Row()
+                          .width(`${Math.min(100, Math.round((badge.progress / badge.target) * 100))}%`)
+                          .height(4)
+                          .backgroundColor(BLUE)
+                          .borderRadius(2)
+                      }
+                      .width('100%')
+                      .height(4)
+                      .backgroundColor(this.surfaceAlt())
+                      .borderRadius(2)
+                    }
+                    .width('100%')
+
+                    Text(`${badge.progress} / ${badge.target}`)
+                      .fontSize(11)
+                      .fontColor(MUTED)
+                      .width('100%')
+                  }
+                }
+                .layoutWeight(1)
+                .alignItems(HorizontalAlign.Start)
+              }
+              .width('100%')
+              .padding(14)
+              .backgroundColor(this.surface())
+              .borderRadius(8)
+              .shadow(this.cardShadow())
+              .opacity(badge.unlocked ? 1 : 0.7)
+            }, (badge: BadgeItem) => badge.type)
+          }
+          .width('100%')
+          .padding({ left: 24, right: 24, top: 12, bottom: 40 })
+          .constraintSize({ maxWidth: 980 })
+        }
+        .width('100%')
+      }
+      .layoutWeight(1)
+      .scrollable(ScrollDirection.Vertical)
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(this.pageBg())
+  }
+
+  // ========== 反馈建议功能 ==========
+
+  @Builder
+  FeedbackPage() {
+    Column() {
+      // Header
+      Row({ space: 12 }) {
+        Button() {
+          Text('<')
+            .fontSize(22)
+            .fontColor(this.primaryText())
+        }
+        .width(44)
+        .height(44)
+        .backgroundColor('transparent')
+        .onClick(() => {
+          this.flowPage = 'main';
+        })
+
+        Text('反馈建议')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryText())
+          .layoutWeight(1)
+
+        // Tab 切换
+        Row({ space: 4 }) {
+          Text('历史记录')
+            .fontSize(14)
+            .fontWeight(this.feedbackTab === 'list' ? FontWeight.Bold : FontWeight.Normal)
+            .fontColor(this.feedbackTab === 'list' ? '#FFFFFF' : this.secondaryText())
+            .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+            .backgroundColor(this.feedbackTab === 'list' ? BLUE : this.surfaceAlt())
+            .borderRadius(6)
+            .onClick(() => {
+              this.feedbackTab = 'list';
+              this.feedbackError = '';
+            })
+
+          Text('写反馈')
+            .fontSize(14)
+            .fontWeight(this.feedbackTab === 'write' ? FontWeight.Bold : FontWeight.Normal)
+            .fontColor(this.feedbackTab === 'write' ? '#FFFFFF' : this.secondaryText())
+            .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+            .backgroundColor(this.feedbackTab === 'write' ? BLUE : this.surfaceAlt())
+            .borderRadius(6)
+            .onClick(() => {
+              this.feedbackTab = 'write';
+              this.feedbackError = '';
+              this.resetFeedbackForm();
+            })
+        }
+      }
+      .width('100%')
+      .height(56)
+      .padding({ left: 16, right: 16 })
+      .backgroundColor(this.surface())
+
+      // Content
+      if (this.feedbackTab === 'list') {
+        this.FeedbackListPage()
+      } else {
+        this.FeedbackWritePage()
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(this.pageBg())
+  }
+
+  @Builder
+  FeedbackListPage() {
+    if (this.feedbacks.length === 0) {
+      Column({ space: 14 }) {
+        Text('📋')
+          .fontSize(48)
+        Text('暂无反馈记录')
+          .fontSize(17)
+          .fontColor(this.primaryText())
+          .fontWeight(FontWeight.Medium)
+        Text('点击右上角"写反馈"开始提交')
+          .fontSize(14)
+          .fontColor(this.secondaryText())
+        Button('立即反馈')
+          .fontSize(15)
+          .fontColor(Color.White)
+          .backgroundColor(BLUE)
+          .borderRadius(8)
+          .height(42)
+          .padding({ left: 24, right: 24 })
+          .onClick(() => {
+            this.feedbackTab = 'write';
+            this.resetFeedbackForm();
+          })
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center)
+    } else {
+      Column() {
+        Row() {
+          Text(`共 ${this.feedbacks.length} 条反馈`)
+            .fontSize(13)
+            .fontColor(this.secondaryText())
+          Blank()
+          Text('清空全部')
+            .fontSize(13)
+            .fontColor(RED)
+            .onClick(() => {
+              FeedbackService.clearAllFeedbacks(this.currentStudentId);
+              this.loadFeedbacks();
+              this.toast('已清空全部反馈');
+            })
+        }
+        .width('100%')
+        .padding({ left: 24, right: 24, top: 14, bottom: 10 })
+
+        Scroll() {
+          Column({ space: 10 }) {
+            ForEach(this.feedbacks, (item: FeedbackItem) => {
+              Column({ space: 8 }) {
+                Row({ space: 10 }) {
+                  // 类型标签
+                  Text(FeedbackService.typeLabel(item.type))
+                    .fontSize(11)
+                    .fontColor(FeedbackService.typeColor(item.type))
+                    .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+                    .backgroundColor(FeedbackService.typeBgColor(item.type))
+                    .borderRadius(4)
+
+                  Text(item.title)
+                    .fontSize(15)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(this.primaryText())
+                    .layoutWeight(1)
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+                  // 状态标签
+                  Text(FeedbackService.statusLabel(item.status))
+                    .fontSize(11)
+                    .fontColor(FeedbackService.statusColor(item.status))
+                    .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+                    .backgroundColor(this.surfaceAlt())
+                    .borderRadius(4)
+                }
+                .width('100%')
+
+                Text(item.content)
+                  .fontSize(13)
+                  .fontColor(this.secondaryText())
+                  .width('100%')
+                  .maxLines(3)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+                Row({ space: 12 }) {
+                  Text(FeedbackService.formatTime(item.timestamp))
+                    .fontSize(12)
+                    .fontColor(MUTED)
+
+                  if (item.contact.length > 0) {
+                    Text(`联系方式：${item.contact}`)
+                      .fontSize(12)
+                      .fontColor(BLUE)
+                  }
+                }
+                .width('100%')
+              }
+              .width('100%')
+              .padding(14)
+              .backgroundColor(this.surface())
+              .borderRadius(8)
+              .shadow(this.cardShadow())
+            }, (item: FeedbackItem) => item.id)
+          }
+          .width('100%')
+          .padding({ left: 24, right: 24, top: 8, bottom: 40 })
+          .constraintSize({ maxWidth: 980 })
+        }
+        .width('100%')
+        .layoutWeight(1)
+      }
+      .width('100%')
+      .layoutWeight(1)
+    }
+  }
+
+  @Builder
+  FeedbackWritePage() {
+    Column() {
+      Scroll() {
+        Column({ space: 18 }) {
+          Text('提交反馈')
+            .fontSize(22)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.primaryText())
+            .width('100%')
+
+          // 反馈类型
+          Column({ space: 8 }) {
+            Text('反馈类型')
+              .fontSize(16)
+              .fontColor(this.primaryText())
+              .width('100%')
+            Flex({ wrap: FlexWrap.Wrap }) {
+              ForEach(FEEDBACK_TYPE_OPTIONS, (opt: FeedbackTypeOption) => {
+                Row({ space: 6 }) {
+                  Text(opt.icon)
+                    .fontSize(16)
+                  Text(opt.label)
+                    .fontSize(13)
+                    .fontWeight(this.feedbackType === opt.value ? FontWeight.Bold : FontWeight.Normal)
+                    .fontColor(this.feedbackType === opt.value ? '#FFFFFF' : this.secondaryText())
+                }
+                .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+                .backgroundColor(this.feedbackType === opt.value ? BLUE : this.surfaceAlt())
+                .borderRadius(8)
+                .onClick(() => {
+                  this.feedbackType = opt.value;
+                })
+              }, (opt: FeedbackTypeOption) => opt.value)
+            }
+            .width('100%')
+          }
+          .width('100%')
+
+          // 标题
+          Column({ space: 8 }) {
+            Text('标题')
+              .fontSize(16)
+              .fontColor(this.primaryText())
+              .width('100%')
+            TextInput({ text: this.feedbackTitle, placeholder: '一句话概括你的反馈（4-50字）' })
+              .fontSize(15)
+              .maxLength(50)
+              .width('100%')
+              .height(48)
+              .backgroundColor(this.surfaceAlt())
+              .borderRadius(8)
+              .padding({ left: 14, right: 14 })
+              .onChange((value: string) => {
+                this.feedbackTitle = value;
+              })
+          }
+          .width('100%')
+
+          // 内容
+          Column({ space: 8 }) {
+            Text('详细描述')
+              .fontSize(16)
+              .fontColor(this.primaryText())
+              .width('100%')
+            TextArea({ text: this.feedbackContent, placeholder: this.currentPlaceholder() })
+              .fontSize(15)
+              .maxLength(500)
+              .width('100%')
+              .height(140)
+              .backgroundColor(this.surfaceAlt())
+              .borderRadius(8)
+              .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+              .onChange((value: string) => {
+                this.feedbackContent = value;
+              })
+            Text(`${this.feedbackContent.length}/500`)
+              .fontSize(12)
+              .fontColor(MUTED)
+              .width('100%')
+              .textAlign(TextAlign.End)
+          }
+          .width('100%')
+
+          // 联系方式（可选）
+          Column({ space: 8 }) {
+            Text('联系方式（选填）')
+              .fontSize(16)
+              .fontColor(this.primaryText())
+              .width('100%')
+            TextInput({ text: this.feedbackContact, placeholder: '手机号/邮箱，方便我们回复你' })
+              .fontSize(15)
+              .maxLength(30)
+              .width('100%')
+              .height(48)
+              .backgroundColor(this.surfaceAlt())
+              .borderRadius(8)
+              .padding({ left: 14, right: 14 })
+              .onChange((value: string) => {
+                this.feedbackContact = value;
+              })
+          }
+          .width('100%')
+
+          if (this.feedbackError.length > 0) {
+            Text(this.feedbackError)
+              .fontSize(14)
+              .fontColor(RED)
+              .width('100%')
+          }
+
+          // 提交按钮
+          Button('提交反馈')
+            .height(52)
+            .width('100%')
+            .fontSize(17)
+            .fontWeight(FontWeight.Medium)
+            .backgroundColor(BLUE)
+            .fontColor(Color.White)
+            .borderRadius(8)
+            .onClick(() => this.submitFeedback())
+        }
+        .width('100%')
+        .padding({ left: 24, right: 24, top: 20, bottom: 40 })
+        .constraintSize({ maxWidth: 560 })
+      }
+      .layoutWeight(1)
+      .width('100%')
+    }
+    .width('100%')
+    .layoutWeight(1)
+  }
+
+  @Builder
+  VersionPage() {
+    Column() {
+      // Header
+      Row({ space: 12 }) {
+        Button() {
+          Text('<')
+            .fontSize(22)
+            .fontColor(this.primaryText())
+        }
+        .width(44)
+        .height(44)
+        .backgroundColor('transparent')
+        .onClick(() => {
+          this.flowPage = 'main';
+        })
+
+        Text('版本更新')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryText())
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .height(56)
+      .padding({ left: 16, right: 16 })
+      .backgroundColor(this.surface())
+
+      Scroll() {
+        Column({ space: 20 }) {
+          // 当前版本卡片
+          Column({ space: 12 }) {
+            Text('🚀')
+              .fontSize(48)
+            Text(`FaceCheck v${VersionService.getCurrentVersion()}`)
+              .fontSize(22)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.primaryText())
+            Text('当前版本')
+              .fontSize(14)
+              .fontColor(this.secondaryText())
+
+            if (this.versionHasNew && this.versionInfo) {
+              Column({ space: 8 }) {
+                Text(`发现新版本 v${this.versionInfo.latestVersion}`)
+                  .fontSize(16)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(BLUE)
+                Text(`发布时间：${VersionService.formatDate(this.versionInfo.publishDate)}`)
+                  .fontSize(13)
+                  .fontColor(this.secondaryText())
+                Text(this.versionInfo.releaseNotes)
+                  .fontSize(14)
+                  .fontColor(this.primaryText())
+                  .width('100%')
+                  .textAlign(TextAlign.Center)
+
+                Button('立即更新')
+                  .height(48)
+                  .width('80%')
+                  .fontSize(16)
+                  .fontWeight(FontWeight.Medium)
+                  .backgroundColor(BLUE)
+                  .fontColor(Color.White)
+                  .borderRadius(8)
+                  .margin({ top: 8 })
+                  .onClick(() => {
+                    this.toast('已跳转至下载页面（模拟）');
+                  })
+
+                Button('忽略此版本')
+                  .height(40)
+                  .width('60%')
+                  .fontSize(14)
+                  .backgroundColor('transparent')
+                  .fontColor(this.secondaryText())
+                  .onClick(() => {
+                    if (this.versionInfo) {
+                      VersionService.ignoreVersion(this.versionInfo.latestVersion);
+                      this.versionHasNew = false;
+                      this.toast('已忽略此版本');
+                    }
+                  })
+              }
+              .width('100%')
+              .padding(16)
+              .backgroundColor(this.surfaceAlt())
+              .borderRadius(12)
+              .margin({ top: 8 })
+            }
+
+            Button(this.checkingUpdate ? '检查中…' : '检查更新')
+              .height(48)
+              .width('80%')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .backgroundColor(BLUE)
+              .fontColor(Color.White)
+              .borderRadius(8)
+              .enabled(!this.checkingUpdate)
+              .margin({ top: 12 })
+              .onClick(() => this.checkUpdate())
+          }
+          .width('100%')
+          .padding(24)
+          .backgroundColor(this.surface())
+          .borderRadius(12)
+          .alignItems(HorizontalAlign.Center)
+
+          // Tab 切换
+          Row({ space: 12 }) {
+            Text('版本介绍')
+              .fontSize(14)
+              .fontWeight(this.versionTab === 'current' ? FontWeight.Bold : FontWeight.Normal)
+              .fontColor(this.versionTab === 'current' ? '#FFFFFF' : this.secondaryText())
+              .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+              .backgroundColor(this.versionTab === 'current' ? BLUE : this.surfaceAlt())
+              .borderRadius(6)
+              .onClick(() => {
+                this.versionTab = 'current';
+              })
+
+            Text('历史版本')
+              .fontSize(14)
+              .fontWeight(this.versionTab === 'history' ? FontWeight.Bold : FontWeight.Normal)
+              .fontColor(this.versionTab === 'history' ? '#FFFFFF' : this.secondaryText())
+              .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+              .backgroundColor(this.versionTab === 'history' ? BLUE : this.surfaceAlt())
+              .borderRadius(6)
+              .onClick(() => {
+                this.versionTab = 'history';
+              })
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+
+          // 内容区域
+          if (this.versionTab === 'current') {
+            this.VersionCurrentPage()
+          } else {
+            this.VersionHistoryPage()
+          }
+        }
+        .width('100%')
+        .padding({ left: 20, right: 20, top: 20, bottom: 40 })
+        .constraintSize({ maxWidth: 560 })
+      }
+      .layoutWeight(1)
+      .width('100%')
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(this.pageBg())
+  }
+
+  @Builder
+  VersionCurrentPage() {
+    Column({ space: 16 }) {
+      Text('本次更新内容')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.primaryText())
+        .width('100%')
+
+      if (VersionService.getUpdateLogs().length > 0) {
+        Column({ space: 10 }) {
+          Row({ space: 10 }) {
+            Text(`v${VersionService.getUpdateLogs()[0].version}`)
+              .fontSize(16)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(BLUE)
+            Text(VersionService.getUpdateLogs()[0].date)
+              .fontSize(13)
+              .fontColor(this.secondaryText())
+            Blank()
+            if (VersionService.getUpdateLogs()[0].force) {
+              Text('强制更新')
+                .fontSize(11)
+                .fontColor(RED)
+                .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                .backgroundColor(RED_SOFT)
+                .borderRadius(4)
+            }
+          }
+          .width('100%')
+
+          Text(VersionService.getUpdateLogs()[0].title)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.primaryText())
+            .width('100%')
+
+          Column({ space: 8 }) {
+            ForEach(VersionService.getUpdateLogs()[0].changes, (change: string, index: number) => {
+              Row({ space: 8 }) {
+                Text('•')
+                  .fontSize(14)
+                  .fontColor(BLUE)
+                Text(change)
+                  .fontSize(14)
+                  .fontColor(this.primaryText())
+                  .layoutWeight(1)
+              }
+              .width('100%')
+            }, (change: string, index: number) => index.toString())
+          }
+          .width('100%')
+        }
+        .width('100%')
+        .padding(16)
+        .backgroundColor(this.surface())
+        .borderRadius(12)
+      }
+    }
+    .width('100%')
+  }
+
+  @Builder
+  VersionHistoryPage() {
+    Column({ space: 12 }) {
+      Text('历史版本记录')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.primaryText())
+        .width('100%')
+
+      ForEach(VersionService.getUpdateLogs(), (log: UpdateLogItem, index: number) => {
+        Column({ space: 8 }) {
+          Row({ space: 10 }) {
+            Text(`v${log.version}`)
+              .fontSize(16)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(BLUE)
+            Text(log.date)
+              .fontSize(13)
+              .fontColor(this.secondaryText())
+            Blank()
+            if (index === 0) {
+              Text('当前')
+                .fontSize(11)
+                .fontColor(GREEN)
+                .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                .backgroundColor(GREEN_SOFT)
+                .borderRadius(4)
+            }
+          }
+          .width('100%')
+
+          Text(log.title)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.primaryText())
+            .width('100%')
+
+          Column({ space: 6 }) {
+            ForEach(log.changes, (change: string, cIdx: number) => {
+              Row({ space: 8 }) {
+                Text('•')
+                  .fontSize(13)
+                  .fontColor(BLUE)
+                Text(change)
+                  .fontSize(13)
+                  .fontColor(this.secondaryText())
+                  .layoutWeight(1)
+              }
+              .width('100%')
+            }, (change: string, cIdx: number) => cIdx.toString())
+          }
+          .width('100%')
+        }
+        .width('100%')
+        .padding(16)
+        .backgroundColor(this.surface())
+        .borderRadius(12)
+      }, (log: UpdateLogItem, index: number) => log.version)
+    }
+    .width('100%')
+  }
+
+  private currentPlaceholder(): string {
+    for (let i = 0; i < FEEDBACK_TYPE_OPTIONS.length; i++) {
+      if (FEEDBACK_TYPE_OPTIONS[i].value === this.feedbackType) {
+        return FEEDBACK_TYPE_OPTIONS[i].placeholder;
+      }
+    }
+    return '请描述你的反馈内容…';
+  }
+
+  private resetFeedbackForm(): void {
+    this.feedbackType = 'bug';
+    this.feedbackTitle = '';
+    this.feedbackContent = '';
+    this.feedbackContact = '';
+    this.feedbackError = '';
+  }
+
+  private submitFeedback(): void {
+    // 校验
+    const title: string = this.feedbackTitle.trim();
+    const content: string = this.feedbackContent.trim();
+    if (title.length < 2) {
+      this.feedbackError = '标题至少需要2个字符';
+      return;
+    }
+    if (content.length < 5) {
+      this.feedbackError = '描述至少需要5个字符';
+      return;
+    }
+
+    // 创建反馈
+    const now: number = Date.now();
+    const feedback: FeedbackItem = {
+      id: `fb-${now}`,
+      type: this.feedbackType as FeedbackType,
+      title: title,
+      content: content,
+      contact: this.feedbackContact.trim(),
+      timestamp: now,
+      status: 'pending',
+      studentId: this.currentStudentId
+    };
+
+    FeedbackService.addFeedback(this.currentStudentId, feedback);
+    this.loadFeedbacks();
+    this.toast('反馈已提交，感谢你的建议！');
+
+    // 切换到列表页
+    this.feedbackTab = 'list';
+    this.resetFeedbackForm();
   }
 }

@@ -1,12 +1,13 @@
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
-import { AttendanceRecord, FaceProfile, StudentAccount } from '../models/FaceCheckModels';
+import { AttendanceRecord, BadgeItem, Course, FaceProfile, FeedbackItem, NotificationItem, StudentAccount } from '../models/FaceCheckModels';
 
 const STORE_NAME = 'facecheck_demo_store';
 const KEY_LOGGED_IN = 'logged_in';
 const KEY_CURRENT_STUDENT_ID = 'current_student_id';
 const KEY_DARK_MODE = 'dark_mode';
 const KEY_ACCOUNTS = 'student_accounts';
+const KEY_COURSES = 'custom_courses';
 
 export class PreferenceStore {
   private pref?: preferences.Preferences;
@@ -142,6 +143,102 @@ export class PreferenceStore {
     }
   }
 
+  courses(): Course[] {
+    if (!this.pref) {
+      return [];
+    }
+    try {
+      const raw: string = this.pref.getSync(KEY_COURSES, '[]') as string;
+      const parsed: Course[] = JSON.parse(raw) as Course[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      return [];
+    }
+  }
+
+  async saveCourses(courses: Course[]): Promise<void> {
+    if (!this.pref) {
+      return;
+    }
+    try {
+      this.pref.putSync(KEY_COURSES, JSON.stringify(courses));
+      await this.pref.flush();
+    } catch (err) {
+    }
+  }
+
+  notifications(studentId: string): NotificationItem[] {
+    if (!this.pref) {
+      return [];
+    }
+    try {
+      const raw: string = this.pref.getSync(this.studentKey('notifications', studentId), '[]') as string;
+      const parsed: NotificationItem[] = JSON.parse(raw) as NotificationItem[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      return [];
+    }
+  }
+
+  async saveNotifications(studentId: string, notifications: NotificationItem[]): Promise<void> {
+    if (!this.pref) {
+      return;
+    }
+    try {
+      this.pref.putSync(this.studentKey('notifications', studentId), JSON.stringify(notifications));
+      await this.pref.flush();
+    } catch (err) {
+    }
+  }
+
+  badges(studentId: string): BadgeItem[] {
+    if (!this.pref) {
+      return [];
+    }
+    try {
+      const raw: string = this.pref.getSync(this.studentKey('badges', studentId), '[]') as string;
+      const parsed: BadgeItem[] = JSON.parse(raw) as BadgeItem[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      return [];
+    }
+  }
+
+  async saveBadges(studentId: string, badges: BadgeItem[]): Promise<void> {
+    if (!this.pref) {
+      return;
+    }
+    try {
+      this.pref.putSync(this.studentKey('badges', studentId), JSON.stringify(badges));
+      await this.pref.flush();
+    } catch (err) {
+    }
+  }
+
+  feedbacks(studentId: string): FeedbackItem[] {
+    if (!this.pref) {
+      return [];
+    }
+    try {
+      const raw: string = this.pref.getSync(this.studentKey('feedbacks', studentId), '[]') as string;
+      const parsed: FeedbackItem[] = JSON.parse(raw) as FeedbackItem[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      return [];
+    }
+  }
+
+  async saveFeedbacks(studentId: string, feedbacks: FeedbackItem[]): Promise<void> {
+    if (!this.pref) {
+      return;
+    }
+    try {
+      this.pref.putSync(this.studentKey('feedbacks', studentId), JSON.stringify(feedbacks));
+      await this.pref.flush();
+    } catch (err) {
+    }
+  }
+
   private getBoolean(key: string, fallback: boolean): boolean {
     if (!this.pref) {
       return fallback;
@@ -184,6 +281,14 @@ export class PreferenceStore {
       await this.pref.flush();
     } catch (err) {
     }
+  }
+
+  ignoredVersion(): string {
+    return this.getString('ignored_version', '');
+  }
+
+  async saveIgnoredVersion(version: string): Promise<void> {
+    await this.putString('ignored_version', version);
   }
 
   private studentKey(prefix: string, studentId: string): string {

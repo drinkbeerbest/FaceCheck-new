@@ -1,15 +1,34 @@
 import { COURSE_DATA, WEEKDAY_LABELS } from '../data/CourseData';
 import { AttendanceRecord, Course } from '../models/FaceCheckModels';
 import { AttendanceService } from './AttendanceService';
+import { PreferenceStore } from './PreferenceStore';
 
 export class CourseService {
+  private static store?: PreferenceStore;
+  private static customCourses: Course[] = [];
+  private static useCustom: boolean = false;
+
+  static init(store: PreferenceStore): void {
+    CourseService.store = store;
+    const saved: Course[] = store.courses();
+    if (saved.length > 0) {
+      CourseService.customCourses = saved;
+      CourseService.useCustom = true;
+      console.log('加载自定义课表:', saved.length);
+    }
+  }
+
+  private static courseData(): Course[] {
+    return CourseService.useCustom ? CourseService.customCourses : COURSE_DATA;
+  }
+
   static all(): Course[] {
-    return COURSE_DATA;
+    return CourseService.courseData();
   }
 
   static today(now: Date = new Date()): Course[] {
     const weekDay = now.getDay();
-    return COURSE_DATA.filter((course: Course) => course.weekDay === weekDay);
+    return CourseService.courseData().filter((course: Course) => course.weekDay === weekDay);
   }
 
   static nextCourse(now: Date = new Date()): Course | undefined {
@@ -30,7 +49,7 @@ export class CourseService {
   }
 
   static courseById(courseId: string): Course | undefined {
-    return COURSE_DATA.find((course: Course) => course.courseId === courseId);
+    return CourseService.courseData().find((course: Course) => course.courseId === courseId);
   }
 
   static weekdayLabel(weekDay: number): string {
@@ -43,5 +62,48 @@ export class CourseService {
       return 0;
     }
     return Number(parts[0]) * 60 + Number(parts[1]);
+  }
+
+  static saveCourses(courses: Course[]): void {
+    CourseService.customCourses = [...courses];
+    CourseService.useCustom = true;
+    if (CourseService.store) {
+      CourseService.store.saveCourses(courses);
+    }
+  }
+
+  static addCourse(course: Course): void {
+    const current = CourseService.courseData();
+    current.push(course);
+    CourseService.saveCourses(current);
+  }
+
+  static updateCourse(courseId: string, updated: Course): boolean {
+    const current = CourseService.courseData();
+    const index = current.findIndex((c: Course) => c.courseId === courseId);
+    if (index === -1) {
+      return false;
+    }
+    current[index] = updated;
+    CourseService.saveCourses(current);
+    return true;
+  }
+
+  static deleteCourse(courseId: string): boolean {
+    const current = CourseService.courseData();
+    const filtered = current.filter((c: Course) => c.courseId !== courseId);
+    if (filtered.length === current.length) {
+      return false;
+    }
+    CourseService.saveCourses(filtered);
+    return true;
+  }
+
+  static resetToDefault(): void {
+    CourseService.customCourses = [];
+    CourseService.useCustom = false;
+    if (CourseService.store) {
+      CourseService.store.saveCourses([]);
+    }
   }
 }
