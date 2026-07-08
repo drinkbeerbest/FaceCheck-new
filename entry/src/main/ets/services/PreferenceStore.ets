@@ -12,9 +12,18 @@ const KEY_COURSES = 'custom_courses';
 export class PreferenceStore {
   private pref?: preferences.Preferences;
 
-  async init(context: common.UIAbilityContext): Promise<void> {
+  async init(context: common.Context): Promise<void> {
     try {
       this.pref = await preferences.getPreferences(context, { name: STORE_NAME });
+    } catch (err) {
+      this.pref = undefined;
+    }
+  }
+
+  // 同步初始化，供 FormExtensionAbility（卡片进程）使用
+  initSync(context: common.Context): void {
+    try {
+      this.pref = preferences.getPreferencesSync(context, { name: STORE_NAME });
     } catch (err) {
       this.pref = undefined;
     }
@@ -283,6 +292,39 @@ export class PreferenceStore {
     }
   }
 
+  isReminderEnabled(): boolean {
+    return this.getBoolean('reminder_enabled', true);
+  }
+
+  async setReminderEnabled(value: boolean): Promise<void> {
+    await this.putBoolean('reminder_enabled', value);
+  }
+
+  formIds(): string[] {
+    return this.getStringArray('widget_form_ids', []);
+  }
+
+  addFormId(formId: string): void {
+    const ids = this.formIds();
+    if (ids.indexOf(formId) < 0) {
+      ids.push(formId);
+      this.putStringArray('widget_form_ids', ids);
+    }
+  }
+
+  removeFormId(formId: string): void {
+    const ids = this.formIds().filter((id: string) => id !== formId);
+    this.putStringArray('widget_form_ids', ids);
+  }
+
+  reminderIds(): number[] {
+    return this.getNumberArray('reminder_ids', []);
+  }
+
+  saveReminderIds(ids: number[]): void {
+    this.putStringArray('reminder_ids', ids.map((id: number) => `${id}`));
+  }
+
   ignoredVersion(): string {
     return this.getString('ignored_version', '');
   }
@@ -293,5 +335,34 @@ export class PreferenceStore {
 
   private studentKey(prefix: string, studentId: string): string {
     return `${prefix}_${studentId}`;
+  }
+
+  private getStringArray(key: string, fallback: string[]): string[] {
+    if (!this.pref) {
+      return fallback;
+    }
+    try {
+      const raw = this.pref.getSync(key, '[]') as string;
+      const parsed: Object = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as string[]) : fallback;
+    } catch (err) {
+      return fallback;
+    }
+  }
+
+  private getNumberArray(key: string, fallback: number[]): number[] {
+    const strings = this.getStringArray(key, []);
+    return strings.map((s: string) => Number(s)).filter((n: number) => !isNaN(n));
+  }
+
+  private putStringArray(key: string, value: string[]): void {
+    if (!this.pref) {
+      return;
+    }
+    try {
+      this.pref.putSync(key, JSON.stringify(value));
+      this.pref.flushSync();
+    } catch (err) {
+    }
   }
 }

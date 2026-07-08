@@ -42,67 +42,47 @@ export class BadgeService {
     return changed;
   }
 
-  static updateProgress(studentId: string, type: BadgeType, progress: number): void {
-    const badges: BadgeItem[] = BadgeService.loadBadges(studentId);
-    for (let i = 0; i < badges.length; i++) {
-      if (badges[i].type === type) {
-        badges[i].progress = progress;
-      }
-    }
-    BadgeService.saveBadges(studentId, badges);
-  }
 
   static checkSignBadges(studentId: string, records: AttendanceRecord[], courses: Course[]): BadgeType[] {
+    const badges: BadgeItem[] = BadgeService.loadBadges(studentId);
     const unlocked: BadgeType[] = [];
     const successRecords: AttendanceRecord[] = records.filter((r: AttendanceRecord) => r.status === 'success');
 
-    if (successRecords.length >= 1) {
-      if (BadgeService.unlockBadge(studentId, 'first_sign')) {
-        unlocked.push('first_sign');
+    const mark = (type: BadgeType, condition: boolean): void => {
+      if (!condition) {
+        return;
       }
-    }
+      const target = badges.find((b: BadgeItem) => b.type === type);
+      if (target && !target.unlocked) {
+        target.unlocked = true;
+        target.unlockedAt = Date.now();
+        unlocked.push(type);
+      }
+    };
 
     const total: number = successRecords.length;
-    if (total >= 10) {
-      if (BadgeService.unlockBadge(studentId, 'total_10')) {
-        unlocked.push('total_10');
-      }
-    }
-    if (total >= 50) {
-      if (BadgeService.unlockBadge(studentId, 'total_50')) {
-        unlocked.push('total_50');
-      }
-    }
-    if (total >= 100) {
-      if (BadgeService.unlockBadge(studentId, 'total_100')) {
-        unlocked.push('total_100');
-      }
-    }
-
-    BadgeService.updateProgress(studentId, 'total_10', total);
-    BadgeService.updateProgress(studentId, 'total_50', total);
-    BadgeService.updateProgress(studentId, 'total_100', total);
+    mark('first_sign', total >= 1);
+    mark('total_10', total >= 10);
+    mark('total_50', total >= 50);
+    mark('total_100', total >= 100);
 
     const streak: number = BadgeService.calcMaxConsecutiveDays(successRecords);
-    if (streak >= 3) {
-      if (BadgeService.unlockBadge(studentId, 'streak_3')) {
-        unlocked.push('streak_3');
-      }
-    }
-    if (streak >= 7) {
-      if (BadgeService.unlockBadge(studentId, 'streak_7')) {
-        unlocked.push('streak_7');
-      }
-    }
-    if (streak >= 30) {
-      if (BadgeService.unlockBadge(studentId, 'streak_30')) {
-        unlocked.push('streak_30');
-      }
-    }
+    mark('streak_3', streak >= 3);
+    mark('streak_7', streak >= 7);
+    mark('streak_30', streak >= 30);
 
-    BadgeService.updateProgress(studentId, 'streak_3', streak);
-    BadgeService.updateProgress(studentId, 'streak_7', streak);
-    BadgeService.updateProgress(studentId, 'streak_30', streak);
+    const setProgress = (type: BadgeType, progress: number): void => {
+      const target = badges.find((b: BadgeItem) => b.type === type);
+      if (target) {
+        target.progress = progress;
+      }
+    };
+    setProgress('total_10', total);
+    setProgress('total_50', total);
+    setProgress('total_100', total);
+    setProgress('streak_3', streak);
+    setProgress('streak_7', streak);
+    setProgress('streak_30', streak);
 
     const now: Date = new Date();
     const weekStart: Date = new Date(now);
@@ -120,12 +100,9 @@ export class BadgeService {
         break;
       }
     }
-    if (allSigned && weekCourses.length > 0) {
-      if (BadgeService.unlockBadge(studentId, 'perfect_week')) {
-        unlocked.push('perfect_week');
-      }
-    }
+    mark('perfect_week', allSigned && weekCourses.length > 0);
 
+    BadgeService.saveBadges(studentId, badges);
     return unlocked;
   }
 

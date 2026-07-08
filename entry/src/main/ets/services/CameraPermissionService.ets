@@ -14,14 +14,14 @@ export class CameraPermissionService {
         CameraPermissionService.timeout()
       ]);
       if (result === 'timeout') {
-        return 'granted';
+        return 'denied';
       }
       if (!result || result.authResults.length === 0) {
-        return 'granted';
+        return 'denied';
       }
       return result.authResults[0] === 0 ? 'granted' : 'denied';
     } catch (err) {
-      return 'granted';
+      return 'denied';
     }
   }
 

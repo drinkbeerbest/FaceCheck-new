@@ -15,6 +15,14 @@
     {
       "name": "camera_permission_reason",
       "value": "FaceCheck 需要使用摄像头完成人脸录入、活体检测和刷脸签到。"
+    },
+    {
+      "name": "widget_display_name",
+      "value": "FaceCheck 考勤卡片"
+    },
+    {
+      "name": "widget_desc",
+      "value": "桌面查看今日课程与出勤率，一键进入签到"
     }
   ]
 }

@@ -96,7 +96,7 @@ export class AttendanceService {
       if (signedKeys.has(key)) {
         return;
       }
-      if (AttendanceService.recordCountsAsAbsence(record)) {
+      if (AttendanceService.isAbsenceRecord(record)) {
         absenceKeys.add(key);
       }
     });
@@ -205,7 +205,7 @@ export class AttendanceService {
     return `${courseId}|${dateKey}`;
   }
 
-  private static recordCountsAsAbsence(record: AttendanceRecord): boolean {
+  static isAbsenceRecord(record: AttendanceRecord): boolean {
     if (record.absence === true) {
       return true;
     }

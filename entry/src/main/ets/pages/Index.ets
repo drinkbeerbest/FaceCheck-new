@@ -16,6 +16,8 @@ import { FeedbackService } from '../services/FeedbackService';
 import { NotificationService } from '../services/NotificationService';
 import { PreferenceStore } from '../services/PreferenceStore';
 import { VersionService } from '../services/VersionService';
+import { ReminderService } from '../services/ReminderService';
+import EntryFormAbility from '../entryformability/EntryFormAbility';
 
 type MainTab = 'home' | 'records' | 'profile' | 'settings';
 type FlowPage = 'main' | 'login' | 'register' | 'enroll' | 'liveness' | 'recognition' | 'schedule' | 'privacy' | 'courseEdit' | 'courseImport' | 'notifications' | 'badge' | 'feedback' | 'version';
@@ -64,6 +66,7 @@ struct Index {
   @State currentStudentId: string = '';
   @State faceRegistered: boolean = false;
   @State darkMode: boolean = false;
+  @State reminderEnabled: boolean = false;
   @State records: AttendanceRecord[] = [];
   @State recordFilter: RecordFilter = 'today';
   @State showAllRecords: boolean = false;
@@ -88,6 +91,7 @@ struct Index {
   @State faceModeLabel: string = FaceService.modeLabel();
   @State demoSignMode: boolean = false;
   @State userAvatarPath: string = '';  // 用户自定义头像路径
+  private demoCourseCache: Course | null = null;  // 缓存随机选中的演示课程
   // 课程编辑状态
   @State editCourseId: string = '';
   @State editCourseName: string = '';
@@ -148,6 +152,12 @@ struct Index {
 
       // 加载勋章
       this.loadBadges();
+
+      // 课前提醒：根据设置刷新当天提醒
+      this.reminderEnabled = this.store.isReminderEnabled();
+      if (this.loggedIn) {
+        ReminderService.scheduleTodayReminders(this.store, context, this.now(), this.demoSignMode);
+      }
     });
   }
 
@@ -161,6 +171,9 @@ struct Index {
 
   onBackPress(): boolean {
     if (this.flowPage !== 'main') {
+      if (this.flowPage === 'enroll' || this.flowPage === 'liveness' || this.flowPage === 'recognition') {
+        this.stopFacePreview();
+      }
       const parent: FlowPage | null = this.getParentPage(this.flowPage);
       if (parent !== null) {
         this.flowPage = parent;
@@ -178,6 +191,10 @@ struct Index {
     this.lastBackPressTime = now;
     this.toast('再按一次退出');
     return true;
+  }
+
+  aboutToDisappear(): void {
+    FaceCaptureService.releasePreview();
   }
 
   private getParentPage(page: FlowPage): FlowPage | null {
@@ -539,6 +556,7 @@ struct Index {
     .width('100%')
   }
 
+
   @Builder
   ProfilePage() {
     Column({ space: 18 }) {
@@ -737,6 +755,7 @@ struct Index {
           .width('100%')
         this.SettingsRow('bell', '通知管理', '课程开始前提醒', false, () => this.openNotifications())
         this.SettingsToggleRow()
+        this.ReminderToggleRow()
         this.DemoSignWindowRow()
       }
       .width('100%')
@@ -1698,6 +1717,44 @@ struct Index {
   }
 
   @Builder
+  ReminderToggleRow() {
+    Row({ space: 14 }) {
+      this.IconBox('bell', 40, 30, BLUE)
+      Column({ space: 4 }) {
+        Text('课前签到提醒')
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.primaryText())
+        Text('课程开始前自动提醒，常异常课程提前更久')
+          .fontSize(13)
+          .fontColor(this.secondaryText())
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      Toggle({ type: ToggleType.Switch, isOn: this.reminderEnabled })
+        .selectedColor(BLUE)
+        .onChange((isOn: boolean) => {
+          this.reminderEnabled = isOn;
+          this.store.setReminderEnabled(isOn);
+          const ctx = getContext(this) as common.UIAbilityContext;
+          if (isOn) {
+            ReminderService.scheduleTodayReminders(this.store, ctx, this.now(), this.demoSignMode);
+            this.toast('已开启课前提醒');
+          } else {
+            ReminderService.cancelAll(this.store);
+            this.toast('已关闭课前提醒');
+          }
+        })
+    }
+    .width('100%')
+    .padding(18)
+    .justifyContent(FlexAlign.SpaceBetween)
+    .backgroundColor(this.surface())
+    .borderRadius(8)
+    .shadow(this.cardShadow())
+  }
+
+  @Builder
   DemoSignWindowRow() {
     Row({ space: 14 }) {
       this.IconBox('clock', 40, 30, BLUE)
@@ -1717,7 +1774,23 @@ struct Index {
         .onChange((isOn: boolean) => {
           this.demoSignMode = isOn;
           this.showAllRecords = false;
-          this.toast(isOn ? '已开启演示签到窗口' : '已恢复真实时间');
+          const ctx = getContext(this) as common.UIAbilityContext;
+          if (isOn) {
+            // 随机选一节课作为演示（先确定课程，再用于通知和页面显示）
+            this.demoCourseCache = null;
+            const course = this.demoCourse();  // 先取出，避免后续随机不同课程
+            // 演示模式下自动安排提醒以便观察通知效果
+            ReminderService.scheduleTodayReminders(this.store, ctx, this.now(), true, course);
+            this.toast('已开启演示签到窗口，课前提醒即将弹出');
+          } else {
+            this.demoCourseCache = null;
+            // 取消演示提醒，之后按用户偏好重新安排
+            ReminderService.cancelAll(this.store);
+            if (this.store.isReminderEnabled() && this.loggedIn) {
+              ReminderService.scheduleTodayReminders(this.store, ctx, this.now(), false);
+            }
+            this.toast('已恢复真实时间');
+          }
         })
     }
     .width('100%')
@@ -2419,6 +2492,7 @@ struct Index {
       const failRecord = AttendanceService.createFailureRecord(this.user.userId, course, message, this.now(), result.method, true);
       this.records = [failRecord, ...this.records];
       await this.store.saveRecords(this.currentStudentId, this.records);
+      EntryFormAbility.updateForms(this.store);
       const failNotif = NotificationService.createSignFailedNotification(this.currentStudentId, course.courseName, course.courseId, message);
       NotificationService.addNotification(this.currentStudentId, failNotif);
       this.refreshNotificationState();
@@ -2437,6 +2511,7 @@ struct Index {
     record.message = result.message;
     this.records = [record, ...this.records];
     await this.store.saveRecords(this.currentStudentId, this.records);
+    EntryFormAbility.updateForms(this.store);
     const successNotif = NotificationService.createSignSuccessNotification(this.currentStudentId, course.courseName, course.courseId);
     NotificationService.addNotification(this.currentStudentId, successNotif);
     this.refreshNotificationState();
@@ -2536,17 +2611,7 @@ struct Index {
   }
 
   private isAbsenceRecord(record: AttendanceRecord): boolean {
-    if (record.status !== 'fail') {
-      return false;
-    }
-    if (record.absence === true) {
-      return true;
-    }
-    const message = record.message || '';
-    return message.indexOf('超过') >= 0 ||
-      message.indexOf('缺勤') >= 0 ||
-      message.indexOf('未签到') >= 0 ||
-      message.indexOf('签到已结束') >= 0;
+    return AttendanceService.isAbsenceRecord(record);
   }
 
   private visibleRecords(): AttendanceRecord[] {
@@ -2573,21 +2638,12 @@ struct Index {
   }
 
   private demoCourse(): Course {
-    const allCourses = CourseService.all();
-    const unsigned = allCourses.find((course: Course) => {
-      const date = this.demoDateForCourse(course);
-      return !AttendanceService.hasSigned(this.records, course.courseId, AttendanceService.dateKey(date));
-    });
-    return unsigned ? unsigned : allCourses[0];
-  }
-
-  private demoDateForCourse(course: Course): Date {
-    const base = new Date();
-    const delta = (course.weekDay - base.getDay() + 7) % 7;
-    const result = new Date(base.getFullYear(), base.getMonth(), base.getDate() + delta);
-    const startMinutes = CourseService.toMinutes(course.startTime) + 5;
-    result.setHours(Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
-    return result;
+    if (!this.demoCourseCache) {
+      const allCourses = CourseService.all();
+      const index = Math.floor(Math.random() * allCourses.length);
+      this.demoCourseCache = allCourses[index];
+    }
+    return this.demoCourseCache;
   }
 
   private demoCourseName(): string {
