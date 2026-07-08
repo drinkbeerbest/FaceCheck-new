@@ -5,9 +5,6 @@
   "main": "",
   "author": "",
   "license": "",
-  "dependencies": {
-    "@kit.MapKit": "6.0.2(22)",
-    "@kit.LocationKit": "6.0.2(22)"
-  }
+  "dependencies": {}
 }
 

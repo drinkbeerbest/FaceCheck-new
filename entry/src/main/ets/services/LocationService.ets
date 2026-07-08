@@ -238,6 +238,55 @@ export class LocationService {
   }
 
   /**
+   * 模拟位置：生成在校内的检测结果
+   */
+  static mockInsideResult(): GeofenceCheckResult {
+    // 在围栏中心附近随机偏移 20~40 米，模拟真实校内位置
+    const offsetLat = 0.00025; // ≈28米
+    const offsetLng = 0.00025;
+    const userLat = GEOFENCE_CENTER_LAT + offsetLat;
+    const userLng = GEOFENCE_CENTER_LNG + offsetLng;
+    return {
+      inside: true,
+      userLatitude: userLat,
+      userLongitude: userLng,
+      userAddress: '广东省 佛山市 南海区',
+      targetName: GEOFENCE_CENTER_NAME,
+      targetLatitude: GEOFENCE_CENTER_LAT,
+      targetLongitude: GEOFENCE_CENTER_LNG,
+      distanceMeters: 35,
+      radiusMeters: GEOFENCE_RADIUS_METERS,
+      hint: `您已在${GEOFENCE_CENTER_NAME}范围内，可以进行签到。`
+    };
+  }
+
+  /**
+   * 模拟位置：生成在校外的检测结果
+   */
+  static mockOutsideResult(): GeofenceCheckResult {
+    // 模拟在约 1.5 公里外的位置
+    const offsetLat = 0.014;  // ≈1.55公里
+    const offsetLng = 0.010;
+    const userLat = GEOFENCE_CENTER_LAT + offsetLat;
+    const userLng = GEOFENCE_CENTER_LNG + offsetLng;
+    const distance = Math.round(LocationService.calculateDistance(
+      userLat, userLng, GEOFENCE_CENTER_LAT, GEOFENCE_CENTER_LNG
+    ));
+    return {
+      inside: false,
+      userLatitude: userLat,
+      userLongitude: userLng,
+      userAddress: '广东省 佛山市 南海区',
+      targetName: GEOFENCE_CENTER_NAME,
+      targetLatitude: GEOFENCE_CENTER_LAT,
+      targetLongitude: GEOFENCE_CENTER_LNG,
+      distanceMeters: distance,
+      radiusMeters: GEOFENCE_RADIUS_METERS,
+      hint: `您不在${GEOFENCE_CENTER_NAME}区域内（距校区约 ${(distance / 1000).toFixed(1)} 公里），无法签到。`
+    };
+  }
+
+  /**
    * 定位来源描述
    */
   static sourceTypeLabel(sourceType: number): string {
