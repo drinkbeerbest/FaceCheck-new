@@ -1,9 +1,9 @@
 import { common } from '@kit.AbilityKit';
-import { promptAction } from '@kit.ArkUI';
+import { promptAction, router } from '@kit.ArkUI';
 import image from '@ohos.multimedia.image';
 import photoAccessHelper from '@ohos.file.photoAccessHelper';
 import { SECTION_TIMES } from '../data/CourseData';
-import { ANONYMOUS_USER, AttendanceRecord, AttendanceStats, BadgeItem, Course, CourseSignState, FaceServiceResult, FaceStageStatus, FeedbackItem, FeedbackType, FeedbackTypeOption, FEEDBACK_TYPE_OPTIONS, NotificationItem, type UpdateLogItem, type VersionInfo, User, VerificationMethod } from '../models/FaceCheckModels';
+import { ANONYMOUS_USER, AttendanceRecord, AttendanceStats, BadgeItem, Course, CourseSignState, FaceServiceResult, FaceStageStatus, FeedbackItem, FeedbackType, FeedbackTypeOption, FEEDBACK_TYPE_OPTIONS, GEOFENCE_CENTER_NAME, GEOFENCE_RADIUS_METERS, GeofenceCheckResult, NotificationItem, type UpdateLogItem, type VersionInfo, User, VerificationMethod } from '../models/FaceCheckModels';
 import { AccountService } from '../services/AccountService';
 import { AttendanceService } from '../services/AttendanceService';
 import { CameraPermissionService } from '../services/CameraPermissionService';
@@ -15,6 +15,7 @@ import { FaceService } from '../services/FaceService';
 import { FeedbackService } from '../services/FeedbackService';
 import { NotificationService } from '../services/NotificationService';
 import { PreferenceStore } from '../services/PreferenceStore';
+import { LocationService } from '../services/LocationService';
 import { VersionService } from '../services/VersionService';
 import { ReminderService } from '../services/ReminderService';
 import EntryFormAbility from '../entryformability/EntryFormAbility';
@@ -122,6 +123,11 @@ struct Index {
   @State checkingUpdate: boolean = false;
   @State versionHasNew: boolean = false;
   @State versionTab: string = 'current'; // 'current' | 'history'
+
+  // 地理围栏与定位状态
+  @State lastGeofenceResult: GeofenceCheckResult | null = null;
+  @State locationChecking: boolean = false;
+  @State locationPermissionGranted: boolean = false;
 
   aboutToAppear(): void {
     const context = getContext(this) as common.UIAbilityContext;
@@ -757,6 +763,8 @@ struct Index {
         this.SettingsToggleRow()
         this.ReminderToggleRow()
         this.DemoSignWindowRow()
+        this.LocationStatusRow()
+        this.GeofenceInfoRow()
       }
       .width('100%')
 
@@ -1802,6 +1810,107 @@ struct Index {
   }
 
   @Builder
+  LocationStatusRow() {
+    Row({ space: 14 }) {
+      this.IconBox('house', 40, 30, BLUE)
+      Column({ space: 4 }) {
+        Text('设备定位检测')
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.primaryText())
+        Text(this.locationStatusSubtitle())
+          .fontSize(13)
+          .fontColor(this.secondaryText())
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      Column({ space: 6 }) {
+        Button(this.locationChecking ? '检测中…' : '检测位置')
+          .height(36)
+          .fontSize(13)
+          .width(80)
+          .backgroundColor(this.locationChecking ? '#A6B0C2' : BLUE)
+          .fontColor(Color.White)
+          .borderRadius(6)
+          .enabled(!this.locationChecking)
+          .onClick(() => this.handleLocationCheck())
+        Button('查看地图')
+          .height(36)
+          .fontSize(13)
+          .width(80)
+          .backgroundColor('#18B86B')
+          .fontColor(Color.White)
+          .borderRadius(6)
+          .onClick(() => {
+            router.pushUrl({ url: 'pages/MapPage' });
+          })
+      }
+    }
+    .width('100%')
+    .padding(18)
+    .justifyContent(FlexAlign.SpaceBetween)
+    .backgroundColor(this.surface())
+    .borderRadius(8)
+    .shadow(this.cardShadow())
+  }
+
+  @Builder
+  GeofenceInfoRow() {
+    if (this.lastGeofenceResult) {
+      Column({ space: 12 }) {
+        Row({ space: 10 }) {
+          Text(this.lastGeofenceResult.inside ? '✓' : '✗')
+            .fontSize(18)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.lastGeofenceResult.inside ? GREEN : RED)
+          Text(this.lastGeofenceResult.inside ? '已在签到区域内' : '不在签到区域内')
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.lastGeofenceResult.inside ? GREEN : RED)
+        }
+        .width('100%')
+
+        Divider()
+          .strokeWidth(0.5)
+          .color(LINE)
+
+        Column({ space: 6 }) {
+          this.LocationInfoItem('目标区域', this.lastGeofenceResult.targetName)
+          this.LocationInfoItem('围栏半径', `${this.lastGeofenceResult.radiusMeters} 米`)
+          if (this.lastGeofenceResult.distanceMeters >= 0) {
+            this.LocationInfoItem('距离校区', LocationService.formatDistance(this.lastGeofenceResult.distanceMeters))
+          }
+          this.LocationInfoItem('您的定位', this.lastGeofenceResult.userAddress)
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .padding(18)
+      .backgroundColor(this.surface())
+      .borderRadius(8)
+      .shadow(this.cardShadow())
+    }
+  }
+
+  @Builder
+  LocationInfoItem(label: string, value: string) {
+    Row({ space: 8 }) {
+      Text(label)
+        .fontSize(13)
+        .fontColor(this.secondaryText())
+        .width(72)
+      Text(value)
+        .fontSize(13)
+        .fontColor(this.primaryText())
+        .layoutWeight(1)
+        .textAlign(TextAlign.Start)
+        .maxLines(2)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+  }
+
+  @Builder
   FaceDataSettingsCard() {
     Column({ space: 12 }) {
       Text('人脸与隐私')
@@ -2072,7 +2181,51 @@ struct Index {
     this.toast('已清除本机人脸数据');
   }
 
-  private handleHomeAction(): void {
+  /**
+   * 签到前校验地理围栏：检查用户是否在华南师范大学南海校区范围内
+   * @returns true 表示通过校验可以签到，false 表示被拦截
+   */
+  private async checkLocationBeforeSign(): Promise<boolean> {
+    // 权限前置检查
+    if (!this.locationPermissionGranted) {
+      const context = getContext(this) as common.UIAbilityContext;
+      const granted = await LocationService.requestLocationPermission(context);
+      this.locationPermissionGranted = granted;
+      if (!granted) {
+        promptAction.showDialog({
+          title: '位置权限未授权',
+          message: `签到需要在${GEOFENCE_CENTER_NAME}范围内进行，请授权位置权限后重试。`,
+          buttons: [
+            { text: '我知道了', color: '#0B67D1' }
+          ]
+        });
+        return false;
+      }
+    }
+
+    this.locationChecking = true;
+    const result = await LocationService.checkGeofence();
+    this.lastGeofenceResult = result;
+    this.locationChecking = false;
+
+    if (!result.inside) {
+      const distText = result.distanceMeters >= 0
+        ? `（距校约 ${LocationService.formatDistance(result.distanceMeters)}）`
+        : '';
+      promptAction.showDialog({
+        title: '不在签到区域内',
+        message: `${result.hint}\n\n您的当前位置：${result.userAddress}\n签到范围：${GEOFENCE_CENTER_NAME} 周边 ${GEOFENCE_RADIUS_METERS}米内${distText}`,
+        buttons: [
+          { text: '知道了', color: '#0B67D1' }
+        ]
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  private async handleHomeAction(): Promise<void> {
     if (!this.loggedIn) {
       this.openLogin();
       return;
@@ -2086,11 +2239,17 @@ struct Index {
       this.toast(this.todayCourses().length === 0 ? '今日无课程' : '当前不在签到时间内');
       return;
     }
+
+    // 地理围栏校验
+    if (!await this.checkLocationBeforeSign()) {
+      return; // checkLocationBeforeSign 内部已显示提示
+    }
+
     this.activeCourseId = course.courseId;
     this.startLivenessFlow();
   }
 
-  private handleCourseSignAction(course: Course): void {
+  private async handleCourseSignAction(course: Course): Promise<void> {
     const state = this.courseSignState(course);
     if (state.status === 'signed') {
       this.toast('今日该课程已签到');
@@ -2108,6 +2267,12 @@ struct Index {
       this.startEnrollFlow();
       return;
     }
+
+    // 地理围栏校验
+    if (!await this.checkLocationBeforeSign()) {
+      return;
+    }
+
     this.activeCourseId = course.courseId;
     this.startLivenessFlow();
   }
@@ -2507,6 +2672,27 @@ struct Index {
       profile.lastSimilarity = result.similarity;
       await this.store.saveFaceProfile(this.currentStudentId, profile);
     }
+
+    // 二次地理围栏校验：防止用户在活体检测后离开了校区
+    if (this.lastGeofenceResult && !this.lastGeofenceResult.inside) {
+      const recheckResult = await LocationService.checkGeofence();
+      this.lastGeofenceResult = recheckResult;
+      if (!recheckResult.inside) {
+        this.faceStageStatus = 'failed';
+        this.recognitionMessage = '签到失败：您已离开签到区域';
+        const message = recheckResult.distanceMeters >= 0
+          ? `不在签到区域内（距${GEOFENCE_CENTER_NAME}约 ${LocationService.formatDistance(recheckResult.distanceMeters)}）`
+          : recheckResult.hint;
+        const failRecord = AttendanceService.createFailureRecord(this.user.userId, course, message, this.now(), result.method, true);
+        this.records = [failRecord, ...this.records];
+        await this.store.saveRecords(this.currentStudentId, this.records);
+        EntryFormAbility.updateForms(this.store);
+        this.toast(message);
+        this.flowPage = 'main';
+        return;
+      }
+    }
+
     const record = AttendanceService.createSuccessRecord(this.user.userId, course, this.now(), result.method);
     record.message = result.message;
     this.records = [record, ...this.records];
@@ -2649,6 +2835,57 @@ struct Index {
   private demoCourseName(): string {
     const course = this.demoCourse();
     return `${CourseService.weekdayLabel(course.weekDay)} ${course.courseName} ${course.startTime}`;
+  }
+
+  private locationStatusSubtitle(): string {
+    if (this.locationChecking) {
+      return '正在获取当前位置…';
+    }
+    if (!this.lastGeofenceResult) {
+      return '点击按钮检测当前所在位置';
+    }
+    if (this.lastGeofenceResult.inside) {
+      return `✓ 已在${GEOFENCE_CENTER_NAME}范围内`;
+    }
+    if (this.lastGeofenceResult.distanceMeters >= 0) {
+      return `距${GEOFENCE_CENTER_NAME}约 ${LocationService.formatDistance(this.lastGeofenceResult.distanceMeters)}`;
+    }
+    return '定位失败，请确认位置服务已开启';
+  }
+
+  private async handleLocationCheck(): Promise<void> {
+    this.locationChecking = true;
+    try {
+      const context = getContext(this) as common.UIAbilityContext;
+      // 先检查权限
+      if (!await LocationService.hasLocationPermission()) {
+        const granted = await LocationService.requestLocationPermission(context);
+        this.locationPermissionGranted = granted;
+        if (!granted) {
+          this.locationChecking = false;
+          promptAction.showDialog({
+            title: '位置权限未授权',
+            message: '请在系统设置中为FaceCheck开启位置权限，以便验证签到区域。',
+            buttons: [{ text: '知道了', color: '#0B67D1' }]
+          });
+          return;
+        }
+        this.locationPermissionGranted = true;
+      }
+      const result = await LocationService.checkGeofence();
+      this.lastGeofenceResult = result;
+      if (result.inside) {
+        this.toast(`✓ 已在${GEOFENCE_CENTER_NAME}范围内，可以签到`);
+      } else if (result.distanceMeters >= 0) {
+        this.toast(`距${GEOFENCE_CENTER_NAME}约 ${LocationService.formatDistance(result.distanceMeters)}`);
+      } else {
+        this.toast('定位失败，请检查位置服务');
+      }
+    } catch (err) {
+      this.toast('定位失败，请检查位置服务开关');
+    } finally {
+      this.locationChecking = false;
+    }
   }
 
   private navIconName(tab: MainTab): IconName {

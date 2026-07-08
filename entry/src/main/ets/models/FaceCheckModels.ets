@@ -188,6 +188,37 @@ export interface VersionInfo {
   publishDate: string;
 }
 
+// ===================== 定位与地理围栏 =====================
+
+/** 定位结果 */
+export interface LocationResult {
+  latitude: number;
+  longitude: number;
+  accuracy: number;          // 精度（米）
+  sourceType: number;       // 定位来源：1=GNSS, 2=NETWORK
+  timestamp: number;
+}
+
+/** 地理围栏校验结果 */
+export interface GeofenceCheckResult {
+  inside: boolean;
+  userLatitude: number;
+  userLongitude: number;
+  userAddress: string;       // 用户当前位置的描述
+  targetName: string;        // 目标区域名称
+  targetLatitude: number;
+  targetLongitude: number;
+  distanceMeters: number;    // 距离目标中心（米）
+  radiusMeters: number;      // 围栏半径（米）
+  hint: string;              // UI 提示文字
+}
+
+/** 围栏中心：华南师范大学南海校区 */
+export const GEOFENCE_CENTER_LAT = 23.146825;
+export const GEOFENCE_CENTER_LNG = 113.028439;
+export const GEOFENCE_CENTER_NAME = '华南师范大学南海校区';
+export const GEOFENCE_RADIUS_METERS = 700;  // 700米围栏半径
+
 export const CURRENT_VERSION = '2.2.0';
 
 export const UPDATE_LOGS: UpdateLogItem[] = [

@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "C:\\Users\\26357\\.ohos\\config\\default_FaceCheck-main_sa_0iXfuPP0VVRwv9LE_QW6V5QRbRCCGkRLYNxjiPP8=.cer",
+          "certpath": "C:\\Users\\26357\\.ohos\\config\\default_FaceCheck-main_EZtfhf-zUZtY44qNf8pIM9mE-HTkcq-ngrj-U6luYWI=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001B5C9A5874AC66F7EEC02A9AA3B735A8A3ED07E6C4ECC5C6D9E50B9D046F5C31013975A47DB34347",
-          "profile": "C:\\Users\\26357\\.ohos\\config\\default_FaceCheck-main_sa_0iXfuPP0VVRwv9LE_QW6V5QRbRCCGkRLYNxjiPP8=.p7b",
+          "keyPassword": "0000001BD8FF325CD3663E6383C460D897324EB297C5A958B4963CADB4A26056C2247854F5B78348CD151D",
+          "profile": "C:\\Users\\26357\\.ohos\\config\\default_FaceCheck-main_EZtfhf-zUZtY44qNf8pIM9mE-HTkcq-ngrj-U6luYWI=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "C:\\Users\\26357\\.ohos\\config\\default_FaceCheck-main_sa_0iXfuPP0VVRwv9LE_QW6V5QRbRCCGkRLYNxjiPP8=.p12",
-          "storePassword": "0000001BD7873F9F15181815A8D4FC84809741FADB6E457FE2FA94242AB318CCDA8753A90F4AC383B9A670"
+          "storeFile": "C:\\Users\\26357\\.ohos\\config\\default_FaceCheck-main_EZtfhf-zUZtY44qNf8pIM9mE-HTkcq-ngrj-U6luYWI=.p12",
+          "storePassword": "0000001B7EE6296718FF1AEB69D71CC3C2B568CD7EE0BEE526E8E96EF35912374AB675A0373F05FD7EE139"
         }
       }
     ],

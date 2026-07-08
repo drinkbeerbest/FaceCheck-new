@@ -23,6 +23,10 @@
     {
       "name": "widget_desc",
       "value": "桌面查看今日课程与出勤率，一键进入签到"
+    },
+    {
+      "name": "location_permission_reason",
+      "value": "FaceCheck 需要获取位置信息以验证您是否在校区内进行签到，确保考勤的真实性。"
     }
   ]
 }
