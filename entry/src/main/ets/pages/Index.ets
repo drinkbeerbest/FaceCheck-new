@@ -9,7 +9,7 @@ import { AttendanceService } from '../services/AttendanceService';
 import { CameraPermissionService } from '../services/CameraPermissionService';
 import { CourseService } from '../services/CourseService';
 import { BadgeService } from '../services/BadgeService';
-import { FaceCaptureService } from '../services/FaceCaptureService';
+import { FaceCaptureService, CapturedFaceImage } from '../services/FaceCaptureService';
 import { FaceReferenceStore } from '../services/FaceReferenceStore';
 import { FaceService } from '../services/FaceService';
 import { FeedbackService } from '../services/FeedbackService';
@@ -128,6 +128,7 @@ struct Index {
   @State lastGeofenceResult: GeofenceCheckResult | null = null;
   @State locationChecking: boolean = false;
   @State locationPermissionGranted: boolean = false;
+  @State mockMode: number = 0; // 0=无模拟 1=模拟校内 -1=模拟校外
 
   aboutToAppear(): void {
     const context = getContext(this) as common.UIAbilityContext;
@@ -764,6 +765,7 @@ struct Index {
         this.ReminderToggleRow()
         this.DemoSignWindowRow()
         this.LocationStatusRow()
+        this.MockLocationRow()
         this.GeofenceInfoRow()
       }
       .width('100%')
@@ -1828,7 +1830,7 @@ struct Index {
         Button(this.locationChecking ? '检测中…' : '检测位置')
           .height(36)
           .fontSize(13)
-          .width(80)
+          .padding({ left: 14, right: 14 })
           .backgroundColor(this.locationChecking ? '#A6B0C2' : BLUE)
           .fontColor(Color.White)
           .borderRadius(6)
@@ -1837,7 +1839,7 @@ struct Index {
         Button('查看地图')
           .height(36)
           .fontSize(13)
-          .width(80)
+          .padding({ left: 14, right: 14 })
           .backgroundColor('#18B86B')
           .fontColor(Color.White)
           .borderRadius(6)
@@ -1890,6 +1892,50 @@ struct Index {
       .borderRadius(8)
       .shadow(this.cardShadow())
     }
+  }
+
+  @Builder
+  MockLocationRow() {
+    Row({ space: 14 }) {
+      this.IconBox('house', 40, 30, '#F5A623')
+      Column({ space: 4 }) {
+        Text('模拟位置')
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.primaryText())
+        Text(this.mockMode === 0 ? '未启用模拟' : (this.mockMode === 1 ? '已开启：校内位置' : '已开启：校外位置'))
+          .fontSize(13)
+          .fontColor(this.secondaryText())
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      Column({ space: 6 }) {
+        Button('模拟校内')
+          .height(36)
+          .fontSize(13)
+          .padding({ left: 14, right: 14 })
+          .backgroundColor(this.mockMode === 1 ? '#F5A623' : '#EDEDED')
+          .fontColor(this.mockMode === 1 ? Color.White : '#9DA3B0')
+          .border({ width: this.mockMode === 1 ? 0 : 1, color: '#D0D5DD' })
+          .borderRadius(6)
+          .onClick(() => this.handleMockLocation(1))
+        Button('模拟校外')
+          .height(36)
+          .fontSize(13)
+          .padding({ left: 14, right: 14 })
+          .backgroundColor(this.mockMode === -1 ? '#F05252' : '#EDEDED')
+          .fontColor(this.mockMode === -1 ? Color.White : '#9DA3B0')
+          .border({ width: this.mockMode === -1 ? 0 : 1, color: '#D0D5DD' })
+          .borderRadius(6)
+          .onClick(() => this.handleMockLocation(-1))
+      }
+    }
+    .width('100%')
+    .padding(18)
+    .justifyContent(FlexAlign.SpaceBetween)
+    .backgroundColor(this.surface())
+    .borderRadius(8)
+    .shadow(this.cardShadow())
   }
 
   @Builder
@@ -2384,27 +2430,31 @@ struct Index {
     this.previewStartSerial += 1;
     const token = this.previewStartSerial;
     setTimeout(() => {
-      this.startFacePreview(token, 0);
+      this.startFacePreview(token);
     }, 800);
   }
 
-  private async startFacePreview(token: number = this.previewStartSerial, retryCount: number = 0): Promise<void> {
+  private async startFacePreview(token?: number): Promise<void> {
+    const effectiveToken = token !== undefined ? token : this.previewStartSerial;
     if (this.flowPage !== 'enroll' && this.flowPage !== 'recognition') {
       return;
     }
-    if (token !== this.previewStartSerial) {
-      return;
-    }
     const context = getContext(this) as common.UIAbilityContext;
-    const surfaceId = this.currentFaceSurfaceId();
-    if (!surfaceId || surfaceId.length === 0) {
-      if (retryCount < 12) {
-        this.faceStageStatus = 'preparingCamera';
-        setTimeout(() => {
-          this.startFacePreview(token, retryCount + 1);
-        }, 250);
+
+    // 阶段一：等待 XComponent surface ID 就绪（最多 12 次 × 250ms）
+    let surfaceId = '';
+    for (let retry = 0; retry < 12; retry++) {
+      if (effectiveToken !== this.previewStartSerial) {
         return;
       }
+      surfaceId = this.currentFaceSurfaceId();
+      if (surfaceId && surfaceId.length > 0) {
+        break;
+      }
+      this.faceStageStatus = 'preparingCamera';
+      await this.delayMs(250);
+    }
+    if (!surfaceId || surfaceId.length === 0) {
       this.faceStageStatus = 'failed';
       this.cameraPreviewReady = false;
       this.cameraReady = false;
@@ -2412,21 +2462,33 @@ struct Index {
       this.recognitionMessage = '相机预览 surface 未就绪，请返回后重试';
       return;
     }
-    const ready = await FaceCaptureService.startPreview(context, surfaceId);
-    if (!ready && retryCount < 3) {
-      this.faceStageStatus = 'preparingCamera';
-      setTimeout(() => {
-        this.startFacePreview(token, retryCount + 1);
-      }, 400);
-      return;
+
+    // 阶段二：启动前置相机预览（最多 3 次 × 400ms）
+    for (let retry = 0; retry < 3; retry++) {
+      if (effectiveToken !== this.previewStartSerial) {
+        return;
+      }
+      const ready = await FaceCaptureService.startPreview(context, surfaceId);
+      if (ready) {
+        this.cameraPreviewReady = true;
+        this.cameraReady = true;
+        this.faceStageStatus = 'cameraPreview';
+        return;
+      }
+      if (retry < 2) {
+        this.faceStageStatus = 'preparingCamera';
+        await this.delayMs(400);
+      }
     }
-    this.cameraPreviewReady = ready;
-    this.cameraReady = ready;
-    this.faceStageStatus = ready ? 'cameraPreview' : 'failed';
-    if (!ready) {
-      this.flowMessage = '前置摄像头预览启动失败，请检查权限后重试';
-      this.recognitionMessage = '前置摄像头预览启动失败，请检查权限后重试';
-    }
+    this.cameraPreviewReady = false;
+    this.cameraReady = false;
+    this.faceStageStatus = 'failed';
+    this.flowMessage = '前置摄像头预览启动失败，请检查权限后重试';
+    this.recognitionMessage = '前置摄像头预览启动失败，请检查权限后重试';
+  }
+
+  private delayMs(ms: number): Promise<void> {
+    return new Promise<void>(resolve => setTimeout(resolve, ms));
   }
 
   private stopFacePreview(): void {
@@ -2512,17 +2574,27 @@ struct Index {
     }
   }
 
-  private handleFaceStageAction(stage: FlowPage): void {
+  private async handleFaceStageAction(stage: FlowPage): Promise<void> {
     if (this.faceStageStatus === 'waitingPermission' || (this.faceStageStatus === 'failed' && !this.cameraReady)) {
       this.prepareFaceStage(stage);
       return;
     }
-    if (stage === 'enroll') {
-      this.finishEnroll();
-    } else if (stage === 'liveness') {
-      this.finishLiveness();
-    } else if (stage === 'recognition') {
-      this.finishRecognition();
+    try {
+      if (stage === 'enroll') {
+        await this.finishEnroll();
+      } else if (stage === 'liveness') {
+        await this.finishLiveness();
+      } else if (stage === 'recognition') {
+        await this.finishRecognition();
+      }
+    } catch (err) {
+      console.error('Index', `faceStageAction ${stage} 异常: ${JSON.stringify(err)}`);
+      this.faceStageStatus = 'failed';
+      if (stage === 'recognition') {
+        this.recognitionMessage = '操作异常，请返回重试';
+      } else if (stage === 'enroll') {
+        this.flowMessage = '操作异常，请返回重试';
+      }
     }
   }
 
@@ -2607,124 +2679,146 @@ struct Index {
       this.recognitionMessage = '未找到本机人脸参考图，请重新录入人脸';
       return;
     }
-    let referencePixelMap: image.PixelMap;
+    let referencePixelMap: image.PixelMap | undefined;
+    let capture: CapturedFaceImage | undefined;
     try {
-      referencePixelMap = await FaceReferenceStore.loadReference(profile.referenceImagePath);
-    } catch (err) {
-      this.faceStageStatus = 'failed';
-      this.recognitionMessage = '本机人脸参考图读取失败，请重新录入';
-      return;
-    }
-    this.recognitionMessage = '请拍摄当前人脸用于和本地基准图比对';
-    const surfaceId = this.currentFaceSurfaceId();
-    if (!this.cameraPreviewReady || surfaceId.length === 0) {
-      this.recognitionMessage = '相机预览尚未就绪，正在重试';
-      await this.startFacePreview();
-    }
-    const captureToken = this.armCaptureWatchdog('前置摄像头采集超时，请返回后重试。');
-    const capture = await FaceCaptureService.captureFace(context, this.currentFaceSurfaceId());
-    if (!this.isCurrentCaptureAttempt(captureToken)) {
-      return;
-    }
-    this.clearCaptureWatchdog(captureToken);
-    if (!capture) {
-      this.faceStageStatus = 'failed';
-      this.recognitionMessage = '未获取到当前人脸图像，请重试';
-      return;
-    }
-    const result = await FaceService.compare(this.currentStudentId, referencePixelMap, capture.pixelMap);
-    if (!result.success) {
-      this.faceStageStatus = 'failed';
-      this.recognitionMessage = result.message;
-      await this.recordFailedAttendance(result.message, result.method);
-      return;
-    }
-    const course = this.activeCourseId.length > 0 ? CourseService.courseById(this.activeCourseId) : CourseService.activeSignCourse(this.records, this.now());
-    if (!course) {
-      this.toast('当前不在签到时间内');
-      this.flowPage = 'main';
-      return;
-    }
-    if (AttendanceService.hasSigned(this.records, course.courseId, AttendanceService.dateKey(this.now()))) {
-      this.toast('今日该课程已签到');
-      this.flowPage = 'main';
-      return;
-    }
-    const state = AttendanceService.courseSignState(course, this.records, this.now());
-    if (!state.canSign) {
-      this.faceStageStatus = 'failed';
-      const message = state.status === 'missed' ? '已超过签到窗口' : state.hint;
-      const failRecord = AttendanceService.createFailureRecord(this.user.userId, course, message, this.now(), result.method, true);
-      this.records = [failRecord, ...this.records];
-      await this.store.saveRecords(this.currentStudentId, this.records);
-      EntryFormAbility.updateForms(this.store);
-      const failNotif = NotificationService.createSignFailedNotification(this.currentStudentId, course.courseName, course.courseId, message);
-      NotificationService.addNotification(this.currentStudentId, failNotif);
-      this.refreshNotificationState();
-      this.toast(message);
-      this.flowPage = 'main';
-      return;
-    }
-
-    this.faceStageStatus = 'success';
-    this.recognitionMessage = result.message;
-    if (result.similarity !== undefined) {
-      profile.lastSimilarity = result.similarity;
-      await this.store.saveFaceProfile(this.currentStudentId, profile);
-    }
-
-    // 二次地理围栏校验：防止用户在活体检测后离开了校区
-    if (this.lastGeofenceResult && !this.lastGeofenceResult.inside) {
-      const recheckResult = await LocationService.checkGeofence();
-      this.lastGeofenceResult = recheckResult;
-      if (!recheckResult.inside) {
+      try {
+        referencePixelMap = await FaceReferenceStore.loadReference(profile.referenceImagePath);
+      } catch (err) {
         this.faceStageStatus = 'failed';
-        this.recognitionMessage = '签到失败：您已离开签到区域';
-        const message = recheckResult.distanceMeters >= 0
-          ? `不在签到区域内（距${GEOFENCE_CENTER_NAME}约 ${LocationService.formatDistance(recheckResult.distanceMeters)}）`
-          : recheckResult.hint;
+        this.recognitionMessage = '本机人脸参考图读取失败，请重新录入';
+        return;
+      }
+      this.recognitionMessage = '请拍摄当前人脸用于和本地基准图比对';
+      if (!this.cameraPreviewReady || this.currentFaceSurfaceId().length === 0) {
+        this.recognitionMessage = '相机预览尚未就绪，正在重试';
+        await this.startFacePreview();
+        // 重试后重新检查：如果仍然未就绪则放弃本次拍摄
+        if (!this.cameraPreviewReady) {
+          this.faceStageStatus = 'failed';
+          this.recognitionMessage = '相机预览启动失败，请返回后重试';
+          return;
+        }
+      }
+      const captureToken = this.armCaptureWatchdog('前置摄像头采集超时，请返回后重试。');
+      capture = await FaceCaptureService.captureFace(context, this.currentFaceSurfaceId());
+      if (!this.isCurrentCaptureAttempt(captureToken)) {
+        return;
+      }
+      this.clearCaptureWatchdog(captureToken);
+      if (!capture) {
+        this.faceStageStatus = 'failed';
+        this.recognitionMessage = '未获取到当前人脸图像，请重试';
+        return;
+      }
+      const result = await FaceService.compare(this.currentStudentId, referencePixelMap, capture.pixelMap);
+      if (!result.success) {
+        this.faceStageStatus = 'failed';
+        this.recognitionMessage = result.message;
+        await this.recordFailedAttendance(result.message, result.method);
+        return;
+      }
+      const course = this.activeCourseId.length > 0 ? CourseService.courseById(this.activeCourseId) : CourseService.activeSignCourse(this.records, this.now());
+      if (!course) {
+        this.toast('当前不在签到时间内');
+        this.flowPage = 'main';
+        return;
+      }
+      if (AttendanceService.hasSigned(this.records, course.courseId, AttendanceService.dateKey(this.now()))) {
+        this.toast('今日该课程已签到');
+        this.flowPage = 'main';
+        return;
+      }
+      const state = AttendanceService.courseSignState(course, this.records, this.now());
+      if (!state.canSign) {
+        this.faceStageStatus = 'failed';
+        const message = state.status === 'missed' ? '已超过签到窗口' : state.hint;
         const failRecord = AttendanceService.createFailureRecord(this.user.userId, course, message, this.now(), result.method, true);
         this.records = [failRecord, ...this.records];
         await this.store.saveRecords(this.currentStudentId, this.records);
         EntryFormAbility.updateForms(this.store);
+        const failNotif = NotificationService.createSignFailedNotification(this.currentStudentId, course.courseName, course.courseId, message);
+        NotificationService.addNotification(this.currentStudentId, failNotif);
+        this.refreshNotificationState();
         this.toast(message);
         this.flowPage = 'main';
         return;
       }
-    }
 
-    const record = AttendanceService.createSuccessRecord(this.user.userId, course, this.now(), result.method);
-    record.message = result.message;
-    this.records = [record, ...this.records];
-    await this.store.saveRecords(this.currentStudentId, this.records);
-    EntryFormAbility.updateForms(this.store);
-    const successNotif = NotificationService.createSignSuccessNotification(this.currentStudentId, course.courseName, course.courseId);
-    NotificationService.addNotification(this.currentStudentId, successNotif);
-    this.refreshNotificationState();
+      this.faceStageStatus = 'success';
+      this.recognitionMessage = result.message;
+      if (result.similarity !== undefined) {
+        profile.lastSimilarity = result.similarity;
+        await this.store.saveFaceProfile(this.currentStudentId, profile);
+      }
 
-    const unlockedBadges = BadgeService.checkSignBadges(this.currentStudentId, this.records, CourseService.all());
-    if (unlockedBadges.length > 0) {
-      this.loadBadges();
-      const badgeNames: string[] = [];
-      for (let i = 0; i < unlockedBadges.length; i++) {
-        const b = BadgeService.loadBadges(this.currentStudentId).find((badge: BadgeItem) => badge.type === unlockedBadges[i]);
-        if (b) {
-          badgeNames.push(b.title);
+      // 二次地理围栏校验：防止用户在活体检测后离开了校区
+      if (this.lastGeofenceResult && !this.lastGeofenceResult.inside) {
+        const recheckResult = await LocationService.checkGeofence();
+        this.lastGeofenceResult = recheckResult;
+        if (!recheckResult.inside) {
+          this.faceStageStatus = 'failed';
+          this.recognitionMessage = '签到失败：您已离开签到区域';
+          const message = recheckResult.distanceMeters >= 0
+            ? `不在签到区域内（距${GEOFENCE_CENTER_NAME}约 ${LocationService.formatDistance(recheckResult.distanceMeters)}）`
+            : recheckResult.hint;
+          const failRecord = AttendanceService.createFailureRecord(this.user.userId, course, message, this.now(), result.method, true);
+          this.records = [failRecord, ...this.records];
+          await this.store.saveRecords(this.currentStudentId, this.records);
+          EntryFormAbility.updateForms(this.store);
+          this.toast(message);
+          this.flowPage = 'main';
+          return;
         }
       }
-      if (badgeNames.length > 0) {
-        this.toast(`解锁勋章：${badgeNames.join('、')}`);
+
+      const record = AttendanceService.createSuccessRecord(this.user.userId, course, this.now(), result.method);
+      record.message = result.message;
+      this.records = [record, ...this.records];
+      await this.store.saveRecords(this.currentStudentId, this.records);
+      EntryFormAbility.updateForms(this.store);
+      const successNotif = NotificationService.createSignSuccessNotification(this.currentStudentId, course.courseName, course.courseId);
+      NotificationService.addNotification(this.currentStudentId, successNotif);
+      this.refreshNotificationState();
+
+      const unlockedBadges = BadgeService.checkSignBadges(this.currentStudentId, this.records, CourseService.all());
+      if (unlockedBadges.length > 0) {
+        this.loadBadges();
+        const badgeNames: string[] = [];
+        for (let i = 0; i < unlockedBadges.length; i++) {
+          const b = BadgeService.loadBadges(this.currentStudentId).find((badge: BadgeItem) => badge.type === unlockedBadges[i]);
+          if (b) {
+            badgeNames.push(b.title);
+          }
+        }
+        if (badgeNames.length > 0) {
+          this.toast(`解锁勋章：${badgeNames.join('、')}`);
+        } else {
+          this.toast('签到成功');
+        }
       } else {
         this.toast('签到成功');
       }
-    } else {
-      this.toast('签到成功');
-    }
 
-    this.activeCourseId = '';
-    this.stopFacePreview();
-    this.flowPage = 'main';
-    this.currentTab = 'home';
+      this.activeCourseId = '';
+      this.stopFacePreview();
+      this.flowPage = 'main';
+      this.currentTab = 'home';
+    } finally {
+      // 释放 PixelMap 原生资源，防止内存泄漏
+      if (referencePixelMap) {
+        try {
+          referencePixelMap.release();
+        } catch (err) {
+        }
+      }
+      if (capture && capture.pixelMap) {
+        try {
+          capture.pixelMap.release();
+        } catch (err) {
+        }
+      }
+    }
   }
 
   private armCaptureWatchdog(message: string): number {
@@ -2886,6 +2980,28 @@ struct Index {
     } finally {
       this.locationChecking = false;
     }
+  }
+
+  /**
+   * 开关模拟位置（仅用于测试）
+   * @param mode 1=校内 -1=校外 0=关闭
+   */
+  private handleMockLocation(mode: number): void {
+    if (this.mockMode === mode) {
+      // 再次点击同一个按钮 → 关闭模拟
+      this.mockMode = 0;
+      this.lastGeofenceResult = null;
+      this.toast('模拟位置已关闭');
+      return;
+    }
+    this.mockMode = mode;
+    const isInside = mode === 1;
+    const result = isInside
+      ? LocationService.mockInsideResult()
+      : LocationService.mockOutsideResult();
+    this.lastGeofenceResult = result;
+    const label = isInside ? '校内' : '校外';
+    this.toast(`模拟位置：${label}（${LocationService.formatDistance(result.distanceMeters)}）`);
   }
 
   private navIconName(tab: MainTab): IconName {

@@ -3,6 +3,7 @@ import image from '@ohos.multimedia.image';
 import camera from '@ohos.multimedia.camera';
 
 const CAPTURE_TIMEOUT_MS = 20000;
+const SURFACE_SETTLE_MS = 150;
 
 export interface CapturedFaceImage {
   buffer: ArrayBuffer;
@@ -60,10 +61,34 @@ export class FaceCaptureService {
       if (!previewReady) {
         return undefined;
       }
-      return await Promise.race([
-        FaceCaptureService.captureFromPreviewSurface(surfaceId),
-        FaceCaptureService.timeout()
-      ]);
+      // 关键修复：停止预览输出，释放 surface，避免 createPixelMapFromSurface 与
+      // PreviewOutput 写入帧时产生缓冲区竞争导致主线程卡死
+      let wasRunning = false;
+      if (FaceCaptureService.session) {
+        try {
+          await FaceCaptureService.session.stop();
+          wasRunning = true;
+          // 短暂等待，确保最后一帧完全落定到 surface 缓冲区
+          await FaceCaptureService.delay(SURFACE_SETTLE_MS);
+        } catch (err) {
+          // 停止失败也不影响后续流程
+        }
+      }
+      try {
+        return await Promise.race([
+          FaceCaptureService.captureFromPreviewSurface(surfaceId),
+          FaceCaptureService.timeout()
+        ]);
+      } finally {
+        // 恢复预览（以便失败后用户可以重试）
+        if (wasRunning && FaceCaptureService.session) {
+          try {
+            await FaceCaptureService.session.start();
+          } catch (err) {
+            await FaceCaptureService.releasePreview();
+          }
+        }
+      }
     }
     return undefined;
   }
@@ -143,6 +168,10 @@ export class FaceCaptureService {
         resolve(undefined);
       }, CAPTURE_TIMEOUT_MS);
     });
+  }
+
+  private static delay(ms: number): Promise<void> {
+    return new Promise<void>(resolve => setTimeout(resolve, ms));
   }
 
   private static async packPixelMap(pixelMap: image.PixelMap): Promise<ArrayBuffer> {

@@ -7,6 +7,7 @@ import { FaceProfile, FaceRunMode, FaceServiceResult, VerificationMethod } from 
 
 const FACE_SIMILARITY_THRESHOLD = 0.60;
 const LIVENESS_TIMEOUT_MS = 90000;
+const FACE_COMPARE_TIMEOUT_MS = 30000;
 const INTERACTIVE_LIVENESS = 0;
 const SILENT_LIVENESS = 1;
 const NOT_LIVENESS = 2;
@@ -118,9 +119,19 @@ class FaceVisionAdapter implements FaceAdapter {
     }
     try {
       console.info('FaceService', 'faceComparator.init() 开始初始化');
-      await faceComparator.init();
+      const initResult = await Promise.race([
+        faceComparator.init(),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('faceComparator.init 超时')), FACE_COMPARE_TIMEOUT_MS);
+        })
+      ]);
       console.info('FaceService', 'faceComparator.init() 初始化成功，开始比对');
-      const result = await faceComparator.compareFaces({ pixelMap: referencePixelMap }, { pixelMap: currentPixelMap });
+      const result = await Promise.race([
+        faceComparator.compareFaces({ pixelMap: referencePixelMap }, { pixelMap: currentPixelMap }),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('faceComparator.compareFaces 超时')), FACE_COMPARE_TIMEOUT_MS);
+        })
+      ]);
       console.info('FaceService', `比对完成: isSamePerson=${result.isSamePerson}, similarity=${result.similarity}`);
       await faceComparator.release();
       const success = result.isSamePerson && result.similarity >= FACE_SIMILARITY_THRESHOLD;
