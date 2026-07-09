@@ -54,6 +54,12 @@ interface ScheduleDaySegment {
   displayBgColor?: string;
 }
 
+interface SignedCourseInfo {
+  courseName: string;
+  signTime: string;
+  classroom: string;
+}
+
 const COURSE_TYPE_OPTIONS: CourseTypeOption[] = [
   { label: '理论', value: 'theory' },
   { label: '实验', value: 'lab' },
@@ -439,41 +445,251 @@ struct Index {
   @Builder
   HomeActionCard() {
     Column({ space: 20 }) {
-      this.FaceOrbit(this.faceRegistered ? GREEN : BLUE)
+      // 人脸扫描动效环 — 根据状态显示不同颜色/图标
+      if (this.homeSignState() === 'signed') {
+        this.FaceOrbit(GREEN, GREEN_SOFT, '✅', '已签')
+      } else if (this.homeSignState() === 'ready') {
+        this.FaceOrbit(BLUE, BLUE_SOFT, '👤', 'ID')
+      } else {
+        this.FaceOrbit(MUTED, '#F0F4FA', '📅', '无课')
+      }
+
       Text(this.homeTitle())
         .fontSize(24)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.primaryText())
-      Text(this.homeDescription())
-        .fontSize(16)
-        .fontColor(this.secondaryText())
-        .textAlign(TextAlign.Center)
-        .lineHeight(24)
-        .width('78%')
 
+      // 内容区：三种状态不同展示
+      if (this.homeSignState() === 'ready') {
+        this.NextCourseCard(CourseService.activeSignCourse(this.records, this.now())!)
+      } else if (this.homeSignState() === 'signed') {
+        this.SignedInfoCard()
+      } else {
+        Text(this.homeDescription())
+          .fontSize(15)
+          .fontColor(this.secondaryText())
+          .textAlign(TextAlign.Center)
+          .lineHeight(24)
+          .width('80%')
+      }
+
+      // 状态标签行
+      if (this.loggedIn) {
+        Row({ space: 10 }) {
+          // 签到状态 Pill
+          if (this.homeSignState() === 'signed') {
+            this.StatusPill('face', '签到完成', GREEN, GREEN_SOFT)
+          } else {
+            this.StatusPill('face', this.faceRegistered ? '人脸已就绪' : '待录入人脸',
+              this.faceRegistered ? GREEN : RED,
+              this.faceRegistered ? GREEN_SOFT : RED_SOFT)
+          }
+
+          Row({ space: 5 }) {
+            // 位置状态 Pill
+            this.StatusPill('location', this.mockMode !== 0 ? '模拟位置' :
+              (this.locationChecking ? '检测中…' :
+                (this.lastGeofenceResult?.inside ? '位置已确认' : '位置待检测')),
+              this.mockMode !== 0 ? '#F0A030' : (this.lastGeofenceResult?.inside ? GREEN : MUTED),
+              this.mockMode !== 0 ? '#FFF8EC' : (this.lastGeofenceResult?.inside ? GREEN_SOFT : '#F0F4FA'))
+
+            // 检测位置按钮
+            Text(this.locationChecking ? '⏳' : '检测')
+              .fontSize(12)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(BLUE)
+              .padding({ left: 6, right: 6, top: 3, bottom: 3 })
+              .borderRadius(8)
+              .backgroundColor(BLUE_SOFT)
+              .enabled(!this.locationChecking)
+          }
+          .onClick(() => {
+            if (!this.locationChecking) {
+              this.handleLocationCheck();
+            }
+          })
+        }
+      }
+
+      // 主操作按钮
       Button(this.homeButtonText())
         .height(56)
         .width('72%')
-        .backgroundColor(this.loggedIn ? BLUE : '#A6B0C2')
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
         .fontColor(Color.White)
-        .borderRadius(8)
+        .backgroundColor(this.homeButtonEnabled() ? BLUE : '#A6B0C2')
+        .borderRadius(28)
+        .shadow(this.homeButtonEnabled() ? {
+          radius: 12,
+          color: '#330B67D1',
+          offsetY: 4
+        } : { radius: 0, color: '#00000000' })
+        .enabled(this.homeButtonEnabled())
         .onClick(() => this.handleHomeAction())
 
+      // 安全提示（弱化）
       Row({ space: 18 }) {
         Text('人脸数据仅加密存储于本地设备')
-          .fontSize(13)
-          .fontColor(this.secondaryText())
+          .fontSize(12)
+          .fontColor(MUTED)
+          .decoration({ type: TextDecorationType.None })
         Text('符合校级安全标准')
-          .fontSize(13)
-          .fontColor(this.secondaryText())
+          .fontSize(12)
+          .fontColor(MUTED)
       }
     }
     .width('100%')
     .padding({ top: 36, bottom: 32, left: 24, right: 24 })
     .alignItems(HorizontalAlign.Center)
     .backgroundColor(this.surface())
-    .borderRadius(8)
+    .borderRadius(12)
     .shadow(this.cardShadow())
+  }
+
+  @Builder
+  SignedInfoCard() {
+    Column({ space: 6 }) {
+      Row({ space: 8 }) {
+        Text('✅')
+          .fontSize(14)
+        Text(this.signedCourseName())
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(GREEN)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+        Text(this.signedCourseTime())
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(GREEN)
+      }
+      .width('100%')
+
+      Row({ space: 8 }) {
+        Text('📍')
+          .fontSize(12)
+        Text(this.signedCourseClassroom())
+          .fontSize(13)
+          .fontColor(this.secondaryText())
+          .layoutWeight(1)
+        Text('签到完成')
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(GREEN)
+      }
+      .width('100%')
+    }
+    .width('78%')
+    .padding({ top: 14, bottom: 14, left: 18, right: 18 })
+    .backgroundColor(GREEN_SOFT)
+    .borderRadius(10)
+  }
+
+  private signedCourseName(): string {
+    return this.signedCourseInfo()?.courseName || '已完成';
+  }
+
+  private signedCourseTime(): string {
+    return this.signedCourseInfo()?.signTime || '';
+  }
+
+  private signedCourseClassroom(): string {
+    return this.signedCourseInfo()?.classroom || '';
+  }
+
+  @Builder
+  NextCourseCard(course: Course) {
+    Column({ space: 6 }) {
+      Row({ space: 8 }) {
+        Text('📚')
+          .fontSize(14)
+        Text(course.courseName)
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryText())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+        Text(course.startTime)
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(BLUE)
+      }
+      .width('100%')
+
+      Row({ space: 8 }) {
+        Text('📍')
+          .fontSize(12)
+        Text(course.classroom)
+          .fontSize(13)
+          .fontColor(this.secondaryText())
+          .layoutWeight(1)
+        Text(this.courseCountdown(course))
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.courseCountdownColor(course))
+      }
+      .width('100%')
+    }
+    .width('78%')
+    .padding({ top: 14, bottom: 14, left: 18, right: 18 })
+    .backgroundColor(this.surfaceAlt())
+    .borderRadius(10)
+  }
+
+  private courseCountdown(course: Course): string {
+    const nowMinutes = this.now().getHours() * 60 + this.now().getMinutes();
+    const startMinutes = CourseService.toMinutes(course.startTime);
+    const endMinutes = CourseService.toMinutes(course.endTime);
+    if (nowMinutes >= startMinutes && nowMinutes < endMinutes) {
+      return '进行中';
+    }
+    const diff = startMinutes - nowMinutes;
+    if (diff <= 0) {
+      const endDiff = endMinutes - nowMinutes;
+      if (endDiff > 0) return '即将结束';
+      return '已结束';
+    }
+    if (diff < 60) return `还有 ${diff} 分钟`;
+    const hours = Math.floor(diff / 60);
+    const mins = diff % 60;
+    return mins > 0 ? `还有 ${hours} 小时 ${mins} 分钟` : `还有 ${hours} 小时`;
+  }
+
+  private courseCountdownColor(course: Course): string {
+    const nowMinutes = this.now().getHours() * 60 + this.now().getMinutes();
+    const startMinutes = CourseService.toMinutes(course.startTime);
+    const endMinutes = CourseService.toMinutes(course.endTime);
+    if (nowMinutes >= startMinutes && nowMinutes < endMinutes) return GREEN;
+    const diff = startMinutes - nowMinutes;
+    if (diff <= 0) return RED;
+    if (diff <= 10) return RED;
+    if (diff <= 30) return '#F0A030';
+    return BLUE;
+  }
+
+  @Builder
+  StatusPill(icon: string, label: string, color: string, bg: string) {
+    Row({ space: 5 }) {
+      Text(icon === 'face' ? '✅' : (icon === 'location' ? '📍' : '📌'))
+        .fontSize(10)
+      Text(label)
+        .fontSize(12)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(color)
+    }
+    .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+    .backgroundColor(bg)
+    .borderRadius(12)
+  }
+
+  private homeButtonEnabled(): boolean {
+    if (!this.loggedIn) return true;
+    if (!this.faceRegistered) return true;
+    const state = this.homeSignState();
+    return state === 'ready' || state === 'signed';
   }
 
   @Builder
@@ -1654,18 +1870,40 @@ struct Index {
   }
 
   @Builder
-  FaceOrbit(color: string) {
+  FaceOrbit(color: string, softColor: string, icon: string, label: string) {
     Stack() {
+      // 最外圈 — 虚线扫描环
       Column()
-        .width(150)
-        .height(150)
-        .borderRadius(75)
-        .backgroundColor(color === GREEN ? GREEN_SOFT : BLUE_SOFT)
-        .border({ width: 2, color })
-      Text('FACE')
-        .fontSize(22)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(color)
+        .width(160)
+        .height(160)
+        .borderRadius(80)
+        .border({ width: 2, color: color, style: BorderStyle.Dotted })
+        .opacity(0.35)
+
+      // 中圈
+      Column()
+        .width(132)
+        .height(132)
+        .borderRadius(66)
+        .border({ width: 1.5, color: color })
+        .opacity(0.25)
+
+      // 内芯 — 填充圆
+      Column()
+        .width(102)
+        .height(102)
+        .borderRadius(51)
+        .backgroundColor(softColor)
+
+      // 图标 + 标识
+      Column({ space: 2 }) {
+        Text(icon)
+          .fontSize(28)
+        Text(label)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(color)
+      }
     }
   }
 
@@ -2652,6 +2890,11 @@ struct Index {
       this.startEnrollFlow();
       return;
     }
+    // 已签到状态 → 跳转签到记录页
+    if (this.homeSignState() === 'signed') {
+      this.currentTab = 'records';
+      return;
+    }
     const course = CourseService.activeSignCourse(this.records, this.now());
     if (!course) {
       this.toast(this.todayCourses().length === 0 ? '今日无课程' : '当前不在签到时间内');
@@ -3397,11 +3640,58 @@ struct Index {
     return 'gear';
   }
 
+  // 首页三种状态：noCourse = 无课 | ready = 可签到 | signed = 已签到
+  private homeSignState(): 'noCourse' | 'ready' | 'signed' {
+    if (!this.loggedIn || !this.faceRegistered) {
+      return 'noCourse';
+    }
+    const readyCourse = CourseService.activeSignCourse(this.records, this.now());
+    if (readyCourse) {
+      return 'ready';
+    }
+    const today = CourseService.today(this.now());
+    if (today.length === 0) {
+      return 'noCourse';
+    }
+    const dateKey = AttendanceService.dateKey(this.now());
+    const hasSigned = today.some((c: Course) => AttendanceService.hasSigned(this.records, c.courseId, dateKey));
+    return hasSigned ? 'signed' : 'noCourse';
+  }
+
+  // 获取已签到课程的信息（返回 { course, signTime } 或 null）
+  private signedCourseInfo(): SignedCourseInfo | null {
+    const today = CourseService.today(this.now());
+    const dateKey = AttendanceService.dateKey(this.now());
+    for (const course of today) {
+      const record = this.records.find((r: AttendanceRecord) =>
+        r.courseId === course.courseId && r.displayDate === dateKey && r.status === 'success');
+      if (record) {
+        const info: SignedCourseInfo = {
+          courseName: course.courseName,
+          signTime: record.time || '',
+          classroom: course.classroom
+        };
+        return info;
+      }
+    }
+    return null;
+  }
+
   private homeTitle(): string {
     if (!this.loggedIn) {
       return '请先完成登录';
     }
-    return this.faceRegistered ? '准备上课识别' : '当前状态：尚未录入人脸';
+    if (!this.faceRegistered) {
+      return '当前状态：尚未录入人脸';
+    }
+    const state = this.homeSignState();
+    if (state === 'signed') {
+      return '签到完成';
+    }
+    if (state === 'ready') {
+      return '准备上课签到';
+    }
+    return '今日无课程安排';
   }
 
   private homeDescription(): string {
@@ -3411,8 +3701,14 @@ struct Index {
     if (!this.faceRegistered) {
       return '为确保后续课程能够顺利进行无感签到，请先完成初始人脸信息采集。';
     }
-    const course = CourseService.activeSignCourse(this.records, this.now());
-    return course ? `下一节课：${course.courseName}，${course.classroom}，${course.startTime} 开始。` : '今日无课程，可以查看历史签到记录。';
+    const state = this.homeSignState();
+    if (state === 'signed') {
+      return '今日签到已完成，可以查看历史签到记录。';
+    }
+    if (state === 'ready') {
+      return '';
+    }
+    return '今天暂无课程安排，可以查看课表或签到记录。';
   }
 
   private homeButtonText(): string {
@@ -3422,7 +3718,14 @@ struct Index {
     if (!this.faceRegistered) {
       return '开始人脸录入';
     }
-    return CourseService.activeSignCourse(this.records, this.now()) ? '开始签到' : '当前不可签到';
+    const state = this.homeSignState();
+    if (state === 'signed') {
+      return '查看签到记录';
+    }
+    if (state === 'ready') {
+      return '开始签到';
+    }
+    return '当前不可签到';
   }
 
   private courseSignState(course: Course): CourseSignState {
