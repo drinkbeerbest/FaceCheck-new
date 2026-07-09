@@ -7,6 +7,8 @@ export class CourseService {
   private static store?: PreferenceStore;
   private static customCourses: Course[] = [];
   private static useCustom: boolean = false;
+  private static currentAcademicYear: string = '2025-2026';
+  private static currentSemester: string = '1';
 
   static init(store: PreferenceStore): void {
     CourseService.store = store;
@@ -15,6 +17,31 @@ export class CourseService {
       CourseService.customCourses = saved;
       CourseService.useCustom = true;
       console.log('加载自定义课表:', saved.length);
+    }
+    // 恢复保存的学年学期
+    const savedYear = store.get('current_academic_year');
+    const savedSemester = store.get('current_semester');
+    if (savedYear) {
+      CourseService.currentAcademicYear = savedYear;
+    }
+    if (savedSemester) {
+      CourseService.currentSemester = savedSemester;
+    }
+  }
+
+  static get year(): string { return CourseService.currentAcademicYear; }
+  static get semester(): string { return CourseService.currentSemester; }
+
+  static semesterLabel(): string {
+    return `${CourseService.currentAcademicYear} 学年第 ${CourseService.currentSemester} 学期`;
+  }
+
+  static setYearSemester(year: string, semester: string): void {
+    CourseService.currentAcademicYear = year;
+    CourseService.currentSemester = semester;
+    if (CourseService.store) {
+      CourseService.store.save('current_academic_year', year);
+      CourseService.store.save('current_semester', semester);
     }
   }
 
@@ -28,7 +55,7 @@ export class CourseService {
 
   static today(now: Date = new Date()): Course[] {
     const weekDay = now.getDay();
-    return CourseService.courseData().filter((course: Course) => course.weekDay === weekDay);
+    return CourseService.all().filter((course: Course) => course.weekDay === weekDay);
   }
 
   static nextCourse(now: Date = new Date()): Course | undefined {

@@ -3,7 +3,7 @@ import { promptAction, router } from '@kit.ArkUI';
 import image from '@ohos.multimedia.image';
 import photoAccessHelper from '@ohos.file.photoAccessHelper';
 import { SECTION_TIMES } from '../data/CourseData';
-import { ANONYMOUS_USER, AttendanceRecord, AttendanceStats, BadgeItem, Course, CourseSignState, FaceServiceResult, FaceStageStatus, FeedbackItem, FeedbackType, FeedbackTypeOption, FEEDBACK_TYPE_OPTIONS, GEOFENCE_CENTER_NAME, GEOFENCE_RADIUS_METERS, GeofenceCheckResult, NotificationItem, type UpdateLogItem, type VersionInfo, User, VerificationMethod } from '../models/FaceCheckModels';
+import { ANONYMOUS_USER, AttendanceRecord, AttendanceStats, BadgeItem, Course, CourseSignState, FaceServiceResult, FaceStageStatus, FeedbackItem, FeedbackType, FeedbackTypeOption, FEEDBACK_TYPE_OPTIONS, GEOFENCE_CENTER_NAME, GEOFENCE_RADIUS_METERS, GeofenceCheckResult, NotificationItem, SemesterOption, type UpdateLogItem, type VersionInfo, User, VerificationMethod } from '../models/FaceCheckModels';
 import { AccountService } from '../services/AccountService';
 import { AttendanceService } from '../services/AttendanceService';
 import { CameraPermissionService } from '../services/CameraPermissionService';
@@ -97,6 +97,8 @@ struct Index {
   @State livenessAction: string = '请眨眼';
   @State recognitionMessage: string = '等待采集当前人脸样本';
   @State activeCourseId: string = '';
+  @State allCourses: Course[] = [];
+  @State semesterLabel: string = '';
   @State faceStageStatus: FaceStageStatus = 'waitingPermission';
   @State cameraReady: boolean = false;
   @State cameraPreviewReady: boolean = false;
@@ -117,6 +119,12 @@ struct Index {
   @State editCourseError: string = '';
   @State importJsonText: string = '';
   @State importError: string = '';
+  // 学年学期选择
+  @State showYearSemesterPicker: boolean = false;
+  @State pickerYearIndex: number = 0;
+  @State pickerSemesterIndex: number = 0;
+  private yearOptions: string[] = ['2024-2025', '2025-2026', '2026-2027', '2027-2028'];
+  private semesterOptions: string[] = ['1', '2'];
   // 通知状态
   @State notifications: NotificationItem[] = [];
   @State notificationUnreadCount: number = 0;
@@ -159,6 +167,9 @@ struct Index {
       this.faceRegistered = this.loggedIn ? this.user.faceRegistered : false;
       this.darkMode = this.store.isDarkMode();
       this.records = this.loggedIn ? this.store.records(this.currentStudentId) : [];
+
+      // 加载课程数据
+      this.refreshCourses();
 
       // 加载用户头像
       if (this.loggedIn && this.currentStudentId) {
@@ -1101,11 +1112,26 @@ struct Index {
   SchedulePage() {
     Column() {
       this.AuthHeader()
+      if (this.showYearSemesterPicker) {
+        this.YearSemesterPicker()
+      }
       Scroll() {
         Column({ space: 16 }) {
           Row() {
-            this.SectionTitle('我的课表', '2025-2026 学年第 1 学期')
+            this.SectionTitle('我的课表', this.semesterLabel)
             Row({ space: 10 }) {
+              Button('学期')
+                .fontSize(14)
+                .height(36)
+                .backgroundColor(this.surfaceAlt())
+                .fontColor(this.secondaryText())
+                .onClick(() => {
+                  const yrIdx = this.yearOptions.indexOf(CourseService.year);
+                  const semIdx = this.semesterOptions.indexOf(CourseService.semester);
+                  this.pickerYearIndex = yrIdx >= 0 ? yrIdx : 0;
+                  this.pickerSemesterIndex = semIdx >= 0 ? semIdx : 0;
+                  this.showYearSemesterPicker = true;
+                })
               Button('导入')
                 .fontSize(14)
                 .height(36)
@@ -1129,14 +1155,35 @@ struct Index {
           }
           .width('100%')
           .justifyContent(FlexAlign.SpaceBetween)
-          Text('长按或双击可编辑或删除课程')
+          Text('长按或双击可编辑或删除课程，点击空白处可新增')
             .fontSize(12)
             .fontColor(MUTED)
             .width('100%')
             .padding({ bottom: 4 })
           this.ScheduleTable()
-          this.SectionTitle('课程列表', '长按或双击可编辑或删除')
-          ForEach(CourseService.all(), (course: Course) => {
+          Row() {
+            this.SectionTitle('课程列表', '长按或双击可编辑或删除')
+            Button('新增课程')
+              .fontSize(14)
+              .height(36)
+              .backgroundColor(BLUE)
+              .fontColor(Color.White)
+              .borderRadius(8)
+              .padding({ left: 16, right: 16 })
+              .onClick(() => {
+                this.resetCourseEditForm();
+                this.flowPage = 'courseEdit';
+              })
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.SpaceBetween)
+          .alignItems(VerticalAlign.Center)
+          ForEach([...this.allCourses].sort((a: Course, b: Course) => {
+            if (a.weekDay !== b.weekDay) {
+              return a.weekDay - b.weekDay;
+            }
+            return a.sectionStart - b.sectionStart;
+          }), (course: Course) => {
             this.CourseRow(course)
           }, (course: Course) => course.courseId)
         }
@@ -1384,8 +1431,113 @@ struct Index {
         .fontSize(14)
         .fontColor(this.secondaryText())
     }
-    .width('100%')
+    .layoutWeight(1)
     .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  YearSemesterPicker() {
+    Column() {
+      Column({ space: 18 }) {
+        Text('选择学年学期')
+          .fontSize(22)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryText())
+          .width('100%')
+
+        Column({ space: 8 }) {
+          Text('学年')
+            .fontSize(16)
+            .fontColor(this.primaryText())
+            .width('100%')
+          Row({ space: 10 }) {
+            ForEach(this.yearOptions, (year: string, index: number) => {
+              Text(year)
+                .fontSize(14)
+                .fontWeight(this.pickerYearIndex === index ? FontWeight.Bold : FontWeight.Normal)
+                .fontColor(this.pickerYearIndex === index ? '#FFFFFF' : this.secondaryText())
+                .textAlign(TextAlign.Center)
+                .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+                .backgroundColor(this.pickerYearIndex === index ? BLUE : this.surfaceAlt())
+                .borderRadius(8)
+                .onClick(() => {
+                  this.pickerYearIndex = index;
+                })
+            }, (year: string) => year)
+          }
+          .width('100%')
+        }
+        .width('100%')
+
+        Column({ space: 8 }) {
+          Text('学期')
+            .fontSize(16)
+            .fontColor(this.primaryText())
+            .width('100%')
+          Row({ space: 10 }) {
+            ForEach([{ label: '第1学期', value: '1' } as SemesterOption, { label: '第2学期', value: '2' } as SemesterOption],
+            (item: SemesterOption, index: number) => {
+              Text(item.label)
+                .fontSize(14)
+                .fontWeight(this.pickerSemesterIndex === index ? FontWeight.Bold : FontWeight.Normal)
+                .fontColor(this.pickerSemesterIndex === index ? '#FFFFFF' : this.secondaryText())
+                .textAlign(TextAlign.Center)
+                .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+                .backgroundColor(this.pickerSemesterIndex === index ? BLUE : this.surfaceAlt())
+                .borderRadius(8)
+                .onClick(() => {
+                  this.pickerSemesterIndex = index;
+                })
+            }, (item: SemesterOption) => item.value)
+          }
+          .width('100%')
+        }
+        .width('100%')
+
+        Row({ space: 10 }) {
+          Button('取消')
+            .height(48)
+            .layoutWeight(1)
+            .fontSize(16)
+            .backgroundColor(this.surfaceAlt())
+            .fontColor(this.secondaryText())
+            .borderRadius(8)
+            .onClick(() => {
+              this.showYearSemesterPicker = false;
+            })
+          Button('确定')
+            .height(48)
+            .layoutWeight(1)
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .backgroundColor(BLUE)
+            .fontColor(Color.White)
+            .borderRadius(8)
+            .onClick(() => {
+              const year = this.yearOptions[this.pickerYearIndex] || '2025-2026';
+              const semester = this.semesterOptions[this.pickerSemesterIndex] || '1';
+              CourseService.setYearSemester(year, semester);
+              this.refreshCourses();
+              this.showYearSemesterPicker = false;
+            })
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .padding(24)
+      .backgroundColor(this.surface())
+      .borderRadius(12)
+      .shadow(this.cardShadow())
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor('#80000000')
+    .padding({ left: 32, right: 32 })
+    .onClick(() => {
+      this.showYearSemesterPicker = false;
+    })
+    .zIndex(100)
   }
 
   @Builder
@@ -1552,6 +1704,9 @@ struct Index {
                     .height(68 * seg.spanCount)
                     .width('100%')
                     .backgroundColor(this.surface())
+                    .onClick(() => {
+                      this.startAddCourseFromBlank(day, seg.startSec);
+                    })
                 }
               }, (seg: ScheduleDaySegment) => `${day}-${seg.type}-${seg.startSec}`)
             }
@@ -1626,7 +1781,7 @@ struct Index {
     .padding({ left: 5, right: 5, top: 3, bottom: 3 })
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
-    .borderRadius(4)
+    .borderRadius(8)
     .backgroundColor(seg.course ? (seg.displayBgColor || CourseService.courseBgColor(seg.course.courseId)) : this.surface())
     .gesture(
       GestureGroup(GestureMode.Parallel,
@@ -2327,6 +2482,25 @@ struct Index {
    * @returns true 表示通过校验可以签到，false 表示被拦截
    */
   private async checkLocationBeforeSign(): Promise<boolean> {
+    // 模拟位置：直接使用模拟结果，跳过真实定位
+    if (this.mockMode !== 0) {
+      const result = this.mockMode === 1
+        ? LocationService.mockInsideResult()
+        : LocationService.mockOutsideResult();
+      this.lastGeofenceResult = result;
+      if (!result.inside) {
+        promptAction.showDialog({
+          title: '不在签到区域内（模拟位置）',
+          message: `模拟位置不在签到范围内，无法签到。\n签到范围：${GEOFENCE_CENTER_NAME} 周边 ${GEOFENCE_RADIUS_METERS}米内`,
+          buttons: [
+            { text: '知道了', color: '#0B67D1' }
+          ]
+        });
+        return false;
+      }
+      return true;
+    }
+
     // 权限前置检查
     if (!this.locationPermissionGranted) {
       const context = getContext(this) as common.UIAbilityContext;
@@ -2695,6 +2869,7 @@ struct Index {
 
   private openProfileTarget(target: string): void {
     if (target === 'schedule') {
+      this.refreshCourses();
       this.flowPage = 'schedule';
     } else if (target === 'privacy') {
       this.flowPage = 'privacy';
@@ -2958,6 +3133,11 @@ struct Index {
     return CourseService.today(this.now());
   }
 
+  private refreshCourses(): void {
+    this.allCourses = [...CourseService.all()];
+    this.semesterLabel = CourseService.semesterLabel();
+  }
+
   private filteredRecords(): AttendanceRecord[] {
     let records: AttendanceRecord[];
     if (this.recordFilter === 'today') {
@@ -3146,7 +3326,7 @@ struct Index {
 
   // 计算某天课程的节次分段（用于课表单元格合并渲染，并确保相邻课程块颜色不重复）
   private scheduleDaySegments(day: number): ScheduleDaySegment[] {
-    const courses = CourseService.all()
+    const courses = this.allCourses
       .filter((c: Course) => c.weekDay === day)
       .sort((a: Course, b: Course) => a.sectionStart - b.sectionStart);
     const segments: ScheduleDaySegment[] = [];
@@ -3362,6 +3542,7 @@ struct Index {
       } else if (selectResult.index === 1) {
         // 删除
         CourseService.deleteCourse(course.courseId);
+        this.refreshCourses();
         this.toast('课程已删除');
       }
     });
@@ -3378,6 +3559,15 @@ struct Index {
     this.editWeekRange = '1-16周';
     this.editCourseType = 'theory';
     this.editCourseError = '';
+  }
+
+  private startAddCourseFromBlank(day: number, sectionStart: number): void {
+    this.resetCourseEditForm();
+    this.editWeekDay = day;
+    this.editSectionStart = sectionStart;
+    this.editSectionEnd = Math.min(sectionStart, 11);
+    this.editCourseError = '';
+    this.flowPage = 'courseEdit';
   }
 
   private saveCourse(): void {
@@ -3424,6 +3614,7 @@ struct Index {
       CourseService.addCourse(course);
       this.toast('课程已添加');
     }
+    this.refreshCourses();
     this.flowPage = 'schedule';
   }
 
@@ -3442,6 +3633,7 @@ struct Index {
         return;
       }
       CourseService.saveCourses(courses);
+      this.refreshCourses();
       this.toast(`成功导入 ${courses.length} 门课程`);
       this.flowPage = 'schedule';
     } catch (err) {
@@ -3459,6 +3651,10 @@ struct Index {
             .fontSize(24)
             .fontWeight(FontWeight.Bold)
             .fontColor(this.primaryText())
+            .width('100%')
+          Text(`当前：${CourseService.semesterLabel()}`)
+            .fontSize(14)
+            .fontColor(this.secondaryText())
             .width('100%')
 
           this.InputBlock('book', '课程名称', '例如：数据结构', this.editCourseName, false, (input: string) => {
@@ -3674,6 +3870,7 @@ struct Index {
             .borderRadius(8)
             .onClick(() => {
               CourseService.resetToDefault();
+              this.refreshCourses();
               this.toast('已重置为默认课表');
               this.flowPage = 'schedule';
             })

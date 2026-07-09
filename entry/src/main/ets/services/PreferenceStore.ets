@@ -128,6 +128,28 @@ export class PreferenceStore {
     }
   }
 
+  get(key: string): string {
+    if (!this.pref) {
+      return '';
+    }
+    try {
+      return this.pref.getSync(key, '') as string;
+    } catch (err) {
+      return '';
+    }
+  }
+
+  save(key: string, value: string): void {
+    if (!this.pref) {
+      return;
+    }
+    try {
+      this.pref.putSync(key, value);
+      this.pref.flushSync();
+    } catch (err) {
+    }
+  }
+
   accounts(): StudentAccount[] {
     if (!this.pref) {
       return [];

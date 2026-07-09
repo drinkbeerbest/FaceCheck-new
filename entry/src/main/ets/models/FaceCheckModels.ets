@@ -3,6 +3,11 @@ import type image from '@ohos.multimedia.image';
 export type AttendanceStatus = 'success' | 'fail' | 'pending';
 export type VerificationMethod = 'face' | 'mock' | 'cameraMock';
 export type CourseType = 'theory' | 'lab' | 'practice';
+
+export interface SemesterOption {
+  label: string;
+  value: string;
+}
 export type CourseSignStatus = 'signed' | 'notStarted' | 'active' | 'missed';
 export type FaceRunMode = 'demoSafe' | 'visionReady';
 export type FaceStageStatus = 'waitingPermission' | 'preparingCamera' | 'cameraPreview' | 'detecting' | 'success' | 'failed' | 'demoMode';
