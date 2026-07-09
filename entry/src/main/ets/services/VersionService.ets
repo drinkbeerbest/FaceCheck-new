@@ -32,9 +32,9 @@ export class VersionService {
         currentVersion: CURRENT_VERSION,
         latestVersion: remoteVersion,
         updateUrl: 'https://example.com/download/FaceCheck-v2.2.0.hap',
-        releaseNotes: '修复已知问题，优化签到体验，新增版本更新功能',
+        releaseNotes: '新增地理围栏签到校验、课程管理、可视化课表、学年学期切换、模拟定位及多项体验改进',
         forceUpdate: false,
-        publishDate: '2025-06-20'
+        publishDate: '2026-07-09'
       };
     }
 

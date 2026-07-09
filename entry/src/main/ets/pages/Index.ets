@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { promptAction, router } from '@kit.ArkUI';
+import { promptAction } from '@kit.ArkUI';
 import image from '@ohos.multimedia.image';
 import photoAccessHelper from '@ohos.file.photoAccessHelper';
 import { SECTION_TIMES } from '../data/CourseData';
@@ -1203,29 +1203,142 @@ struct Index {
   PrivacyPage() {
     Column() {
       this.AuthHeader()
-      Column({ space: 18 }) {
-        Text('隐私政策')
-          .fontSize(28)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(this.primaryText())
-          .width('100%')
-        Text('FaceCheck 会请求摄像头权限，用于人脸录入、交互式活体检测和刷脸签到。录入时会在应用本机沙箱保存一份经过混淆处理的参考人脸图，仅用于端侧比对，不上传到服务器，也不会写入签到记录。你可以在设置页随时清除本机人脸数据，清除后需要重新录入。')
-          .fontSize(17)
-          .fontColor(this.secondaryText())
-          .lineHeight(28)
-          .width('100%')
+      Scroll() {
+        Column({ space: 24 }) {
+          // 标题
+          Text('隐私政策')
+            .fontSize(28)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.primaryText())
+            .width('100%')
+
+          Text('更新日期：2026年7月9日')
+            .fontSize(12)
+            .fontColor('#9CA3AF')
+            .width('100%')
+
+          Text('生效日期：2026年7月9日')
+            .fontSize(12)
+            .fontColor('#9CA3AF')
+            .width('100%')
+
+          Divider().strokeWidth(0.5).color(LINE)
+
+          // 引言
+          this.PrivacySection('引言',
+            'FaceCheck（以下简称"我们"）深知个人信息对您的重要性，并会尽全力保护您的个人信息安全可靠。' +
+            '我们致力于维持您对我们的信任，恪守以下原则：权责一致原则、目的明确原则、选择同意原则、' +
+            '最小必要原则、确保安全原则、主体参与原则、公开透明原则。' +
+            '本隐私政策旨在向您说明我们如何收集、使用、存储和保护您的个人信息。' +
+            '请您在使用我们的服务前，仔细阅读并充分理解本隐私政策的全部内容。' +
+            '如您不同意本隐私政策的任何条款，请立即停止使用本应用。')
+
+          // 一、信息收集
+          this.PrivacySection('一、我们收集的信息',
+            '为实现签到考勤功能，我们可能会收集以下类型的个人信息：\n\n' +
+            '1. 账户信息：当您注册账户时，您需要提供学号、姓名、班级、院系等信息，用于身份验证和考勤记录关联。\n\n' +
+            '2. 人脸生物特征信息：在您自愿录入人脸数据后，应用会在您进行签到时采集当前人脸图像进行比对验证。\n\n' +
+            '3. 位置信息：为验证您是否在指定签到区域（如校园内），我们会请求获取您的设备精确位置信息。' +
+            '位置信息仅在签到时临时获取，不会在后台持续追踪。\n\n' +
+            '4. 设备信息：我们可能收集设备型号、操作系统版本等基本技术信息，用于故障排查和服务优化。')
+
+          // 二、人脸数据
+          this.PrivacySection('二、人脸数据的处理方式',
+            '人脸数据是极其敏感的个人生物识别信息，我们对此采取最高级别的保护措施：\n\n' +
+            '1. 本地存储：您录入的参考人脸图像经过混淆处理后，仅保存在您设备的应用沙箱（App Sandbox）中，' +
+            '采用系统级文件加密保护。\n\n' +
+            '2. 端侧比对：签到时的活体检测和人脸比对均在本设备端完成，人脸数据不会上传至任何远程服务器或云端。\n\n' +
+            '3. 不写入记录：签到记录中不包含您的人脸图像数据，仅记录签到时间、课程信息和验证方式等必要考勤信息。\n\n' +
+            '4. 不共享：我们不会以任何形式将您的人脸数据共享、出售或转让给任何第三方。\n\n' +
+            '5. 可删除：您可以随时在"设置 → 人脸与隐私"中清除本机保存的参考人脸数据，清除后您需要重新录入方可继续使用签到功能。')
+
+          // 三、位置信息
+          this.PrivacySection('三、位置信息的使用',
+            '我们使用位置信息的唯一目的是验证您是否在允许签到的地理围栏范围内（如校园区域），' +
+            '以防止签到作弊行为。具体说明如下：\n\n' +
+            '1. 仅限签到场景：位置信息仅在您主动点击"签到"或"检测位置"时获取，不会在后台静默采集。\n\n' +
+            '2. 不存储轨迹：我们不会记录或存储您的移动轨迹、历史位置信息。\n\n' +
+            '3. 不分享位置：位置数据仅用于当次签到围栏判断，不会上传服务器或与第三方共享。\n\n' +
+            '4. 模拟模式：应用内置的"模拟位置"功能仅供开发测试使用，实际签到将以真实设备定位为准。')
+
+          // 四、数据存储与安全
+          this.PrivacySection('四、数据存储与安全',
+            '我们采取合理可行的安全措施保护您的个人信息：\n\n' +
+            '1. 人脸数据：存储在设备应用沙箱中，受 HarmonyOS 系统级文件加密保护，其他应用无法访问。\n\n' +
+            '2. 考勤记录：存储在应用本地数据库中，仅您本人可以查看。\n\n' +
+            '3. 账户信息：使用行业标准的加密算法保护您的登录凭证。\n\n' +
+            '4. 数据隔离：不同用户的数据在应用层面相互隔离，互不可见。\n\n' +
+            '尽管我们已采取上述安全措施，但请注意，没有任何安全措施是绝对完美的。' +
+            '如发生个人信息安全事件，我们将按照法律法规要求及时告知您。')
+
+          // 五、用户权利
+          this.PrivacySection('五、您的权利',
+            '根据相关法律法规，您对您的个人信息享有以下权利：\n\n' +
+            '1. 查阅权：您可以在"我的"页面查看您的账户信息和考勤记录。\n\n' +
+            '2. 更正权：如您的注册信息有误，您可以联系管理员进行更正。\n\n' +
+            '3. 删除权：您可以在设置中随时清除本机人脸数据，也可以注销账户来删除所有本地数据。\n\n' +
+            '4. 撤销同意：您可以通过系统设置撤销已授予的摄像头权限和位置权限，但撤销后部分功能将无法正常使用。\n\n' +
+            '5. 数据可携带：您可以导出您的考勤记录和课程数据。')
+
+          // 六、数据共享
+          this.PrivacySection('六、数据共享与披露',
+            '我们承诺不会将您的个人信息出售给任何第三方。仅在以下情形中我们可能披露您的信息：\n\n' +
+            '1. 法律法规要求：根据法律、法规或司法机关的强制性要求进行披露。\n\n' +
+            '2. 保护权益：为保护我们、您或其他用户的合法权益免受损害。\n\n' +
+            '3. 经您同意：在获得您明确同意的情况下向第三方共享。')
+
+          // 七、未成年人保护
+          this.PrivacySection('七、未成年人保护',
+            '本应用主要面向高等院校在校学生。如果您是未满14周岁的未成年人，请在监护人陪同下阅读本隐私政策，' +
+            '并在获得监护人同意后使用本服务。我们不会在明知对方为未满14周岁未成年人的情况下收集其个人信息。')
+
+          // 八、政策更新
+          this.PrivacySection('八、隐私政策更新',
+            '我们可能会根据业务发展或法律法规变化适时修订本隐私政策。修订后的隐私政策将在应用内发布，' +
+            '并于生效日期起正式生效。我们建议您定期查阅本隐私政策，以了解我们最新的隐私保护措施。' +
+            '重大变更我们还会通过应用内通知的方式向您推送提醒。')
+
+          // 九、联系我们
+          this.PrivacySection('九、联系我们',
+            '如您对本隐私政策有任何疑问、意见或建议，或者需要行使您的个人信息相关权利，' +
+            '请通过应用内反馈与我们联系：设置 → 反馈建议。\n\n' +
+            '我们将在收到您的请求后15个工作日内予以回复。')
+
+          // 底部留白
+          Column()
+            .height(40)
+        }
+        .width('100%')
+        .padding(30)
       }
-      .width('70%')
-      .constraintSize({ minWidth: 340, maxWidth: 760 })
-      .padding(30)
+      .layoutWeight(1)
+      .scrollBar(BarState.Auto)
       .backgroundColor(this.surface())
       .borderRadius(8)
       .shadow(this.cardShadow())
     }
-    .width('100%')
-    .height('100%')
+    .width('70%')
+    .constraintSize({ minWidth: 340, maxWidth: 760 })
+    .padding(30)
     .alignItems(HorizontalAlign.Center)
     .backgroundColor(this.pageBg())
+  }
+
+  @Builder
+  PrivacySection(title: string, content: string) {
+    Column({ space: 10 }) {
+      Text(title)
+        .fontSize(19)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.primaryText())
+        .width('100%')
+      Text(content)
+        .fontSize(15)
+        .fontColor(this.secondaryText())
+        .lineHeight(26)
+        .width('100%')
+    }
+    .width('100%')
   }
 
   @Builder
@@ -2086,16 +2199,6 @@ struct Index {
           .borderRadius(6)
           .enabled(!this.locationChecking)
           .onClick(() => this.handleLocationCheck())
-        Button('查看地图')
-          .height(36)
-          .fontSize(13)
-          .padding({ left: 14, right: 14 })
-          .backgroundColor('#18B86B')
-          .fontColor(Color.White)
-          .borderRadius(6)
-          .onClick(() => {
-            router.pushUrl({ url: 'pages/MapPage' });
-          })
       }
     }
     .width('100%')
@@ -3241,6 +3344,8 @@ struct Index {
         }
         this.locationPermissionGranted = true;
       }
+      // 真实定位检测会覆盖模拟状态
+      this.mockMode = 0;
       const result = await LocationService.checkGeofence();
       this.lastGeofenceResult = result;
       if (result.inside) {
