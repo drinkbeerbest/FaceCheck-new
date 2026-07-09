@@ -43,6 +43,17 @@ const RED = '#F05252';
 const RED_SOFT = '#FFF0F0';
 const DARK_BG = '#101722';
 const DARK_CARD = '#182233';
+
+interface ScheduleDaySegment {
+  type: 'gap' | 'course';
+  startSec: number;
+  endSec: number;
+  spanCount: number;
+  course?: Course;
+  displayColor?: string;
+  displayBgColor?: string;
+}
+
 const COURSE_TYPE_OPTIONS: CourseTypeOption[] = [
   { label: '理论', value: 'theory' },
   { label: '实验', value: 'lab' },
@@ -1118,8 +1129,13 @@ struct Index {
           }
           .width('100%')
           .justifyContent(FlexAlign.SpaceBetween)
+          Text('长按或双击可编辑或删除课程')
+            .fontSize(12)
+            .fontColor(MUTED)
+            .width('100%')
+            .padding({ bottom: 4 })
           this.ScheduleTable()
-          this.SectionTitle('课程列表', '长按可编辑或删除')
+          this.SectionTitle('课程列表', '长按或双击可编辑或删除')
           ForEach(CourseService.all(), (course: Course) => {
             this.CourseRow(course)
           }, (course: Course) => course.courseId)
@@ -1402,7 +1418,7 @@ struct Index {
   @Builder
   CourseRow(course: Course) {
     Row({ space: 14 }) {
-      this.IconBox(course.type === 'lab' ? 'camera' : course.type === 'practice' ? 'award' : 'book', 36, 28, BLUE)
+      this.IconBox(course.type === 'lab' ? 'camera' : course.type === 'practice' ? 'award' : 'book', 36, 28, CourseService.courseColor(course.courseId))
       Column({ space: 6 }) {
         Text(course.courseName)
           .fontSize(18)
@@ -1423,11 +1439,18 @@ struct Index {
     .padding(16)
     .backgroundColor(this.surfaceAlt())
     .borderRadius(8)
+    .border({ width: { left: 4 }, color: CourseService.courseColor(course.courseId) })
     .gesture(
-      LongPressGesture({ duration: 500 })
-        .onAction(() => {
-          this.showCourseActionDialog(course);
-        })
+      GestureGroup(GestureMode.Parallel,
+        LongPressGesture({ duration: 500 })
+          .onAction(() => {
+            this.showCourseActionDialog(course);
+          }),
+        TapGesture({ count: 2 })
+          .onAction(() => {
+            this.showCourseActionDialog(course);
+          })
+      )
     )
   }
 
@@ -1474,81 +1497,153 @@ struct Index {
   @Builder
   ScheduleTable() {
     Column() {
+      // 表头行
       Row() {
-        this.ScheduleHeaderCell('节次')
+        Text('节次')
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryText())
+          .textAlign(TextAlign.Center)
+          .height(42)
+          .width(48)
+          .backgroundColor(this.surfaceAlt())
         ForEach([1, 2, 3, 4, 5, 6, 0], (day: number) => {
-          this.ScheduleHeaderCell(CourseService.weekdayLabel(day))
+          Text(CourseService.weekdayLabel(day))
+            .fontSize(13)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.primaryText())
+            .textAlign(TextAlign.Center)
+            .height(42)
+            .layoutWeight(1)
+            .backgroundColor(this.surfaceAlt())
         }, (day: number) => `${day}`)
       }
       .width('100%')
-      ForEach([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], (section: number) => {
+      // 主体：左侧节次列 + 7 天课程列 + 统一网格线
+      Stack({ alignContent: Alignment.TopStart }) {
         Row() {
-          this.ScheduleTimeCell(section)
+          // 左侧节次时间列
+          Column() {
+            ForEach([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], (section: number) => {
+              Column({ space: 1 }) {
+                Text(`${section}`)
+                  .fontSize(12)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(this.primaryText())
+                Text(SECTION_TIMES[section])
+                  .fontSize(8)
+                  .fontColor(this.secondaryText())
+                  .textAlign(TextAlign.Center)
+              }
+              .height(68)
+              .width(48)
+              .justifyContent(FlexAlign.Center)
+              .backgroundColor(this.surfaceAlt())
+            }, (section: number) => `${section}`)
+          }
+          // 7 天课程列
           ForEach([1, 2, 3, 4, 5, 6, 0], (day: number) => {
-            this.ScheduleCourseCell(day, section)
-          }, (day: number) => `${day}-${section}`)
+            Column() {
+              ForEach(this.scheduleDaySegments(day), (seg: ScheduleDaySegment) => {
+                if (seg.type === 'course' && seg.course) {
+                  this.ScheduleCourseBlock(seg)
+                } else {
+                  Column()
+                    .height(68 * seg.spanCount)
+                    .width('100%')
+                    .backgroundColor(this.surface())
+                }
+              }, (seg: ScheduleDaySegment) => `${day}-${seg.type}-${seg.startSec}`)
+            }
+            .border({ width: { left: 0.5 }, color: LINE })
+            .layoutWeight(1)
+          }, (day: number) => `${day}`)
         }
         .width('100%')
-      }, (section: number) => `${section}`)
+        .alignItems(VerticalAlign.Top)
+        // 网格横线覆盖层：11个68px容器，每个顶部画线；末尾补一条底线，共12条线严格对齐68px边界
+        Column() {
+          ForEach([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], (i: number) => {
+            Column() {
+              Divider()
+                .color(LINE)
+                .strokeWidth(0.5)
+                .hitTestBehavior(HitTestMode.None)
+              Column()
+                .width('100%')
+                .layoutWeight(1)
+                .hitTestBehavior(HitTestMode.None)
+            }
+            .height(68)
+            .width('100%')
+            .hitTestBehavior(HitTestMode.None)
+          }, (i: number) => `grid-row-${i}`)
+          Divider()
+            .color(LINE)
+            .strokeWidth(0.5)
+            .hitTestBehavior(HitTestMode.None)
+        }
+        .width('100%')
+        .hitTestBehavior(HitTestMode.None)
+      }
+      .width('100%')
     }
     .width('100%')
     .backgroundColor(this.surface())
     .borderRadius(8)
     .shadow(this.cardShadow())
+    .clip(true)
   }
 
   @Builder
-  ScheduleHeaderCell(label: string) {
-    Text(label)
-      .fontSize(13)
-      .fontWeight(FontWeight.Bold)
-      .fontColor(this.primaryText())
-      .textAlign(TextAlign.Center)
-      .height(42)
-      .layoutWeight(1)
-      .backgroundColor(this.surfaceAlt())
-  }
-
-  @Builder
-  ScheduleTimeCell(section: number) {
-    Column({ space: 3 }) {
-      Text(`${section}`)
-        .fontSize(15)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(this.primaryText())
-      Text(SECTION_TIMES[section])
-        .fontSize(10)
-        .fontColor(this.secondaryText())
-        .textAlign(TextAlign.Center)
-    }
-    .height(72)
-    .layoutWeight(1)
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor(this.surfaceAlt())
-  }
-
-  @Builder
-  ScheduleCourseCell(day: number, section: number) {
-    Column({ space: 3 }) {
-      if (this.hasCourseAt(day, section)) {
-        Text(this.courseAtName(day, section))
-          .fontSize(11)
+  ScheduleCourseBlock(seg: ScheduleDaySegment) {
+    Column() {
+      if (seg.course) {
+        Text(seg.course.courseName)
+          .fontSize(12)
           .fontWeight(FontWeight.Bold)
-          .fontColor(BLUE)
-          .maxLines(2)
+          .fontColor(seg.displayColor || CourseService.courseColor(seg.course.courseId))
+          .maxLines(seg.spanCount >= 3 ? 3 : 2)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(this.courseAtRoom(day, section))
-          .fontSize(10)
-          .fontColor(this.secondaryText())
-      } else {
-        Text('')
+        if (seg.spanCount >= 2) {
+          Text(seg.course.classroom)
+            .fontSize(10)
+            .fontColor(this.secondaryText())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        if (seg.spanCount >= 3) {
+          Text(seg.course.teacher)
+            .fontSize(9)
+            .fontColor(MUTED)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
       }
     }
-    .height(72)
-    .layoutWeight(1)
-    .padding(4)
+    .height(68 * seg.spanCount)
+    .width('100%')
+    .padding({ left: 5, right: 5, top: 3, bottom: 3 })
     .justifyContent(FlexAlign.Center)
-    .backgroundColor(this.hasCourseAt(day, section) ? BLUE_SOFT : this.surface())
+    .alignItems(HorizontalAlign.Center)
+    .borderRadius(4)
+    .backgroundColor(seg.course ? (seg.displayBgColor || CourseService.courseBgColor(seg.course.courseId)) : this.surface())
+    .gesture(
+      GestureGroup(GestureMode.Parallel,
+        LongPressGesture({ duration: 500 })
+          .onAction(() => {
+            if (seg.course) {
+              this.showCourseActionDialog(seg.course);
+            }
+          }),
+        TapGesture({ count: 2 })
+          .onAction(() => {
+            if (seg.course) {
+              this.showCourseActionDialog(seg.course);
+            }
+          })
+      )
+    )
   }
 
   @Builder
@@ -3049,18 +3144,48 @@ struct Index {
     return AttendanceService.courseSignState(course, this.records, this.now());
   }
 
-  private hasCourseAt(day: number, section: number): boolean {
-    return CourseService.all().some((course: Course) => course.weekDay === day && course.sectionStart === section);
-  }
-
-  private courseAtName(day: number, section: number): string {
-    const course = CourseService.all().find((item: Course) => item.weekDay === day && item.sectionStart === section);
-    return course ? course.courseName : '';
-  }
-
-  private courseAtRoom(day: number, section: number): string {
-    const course = CourseService.all().find((item: Course) => item.weekDay === day && item.sectionStart === section);
-    return course ? course.classroom : '';
+  // 计算某天课程的节次分段（用于课表单元格合并渲染，并确保相邻课程块颜色不重复）
+  private scheduleDaySegments(day: number): ScheduleDaySegment[] {
+    const courses = CourseService.all()
+      .filter((c: Course) => c.weekDay === day)
+      .sort((a: Course, b: Course) => a.sectionStart - b.sectionStart);
+    const segments: ScheduleDaySegment[] = [];
+    let cursor = 1;
+    for (const course of courses) {
+      if (course.sectionStart > cursor) {
+        const gapEnd = course.sectionStart - 1;
+        segments.push({ type: 'gap', startSec: cursor, endSec: gapEnd, spanCount: gapEnd - cursor + 1 });
+      }
+      const endSec = Math.min(course.sectionEnd, 11);
+      segments.push({ type: 'course', startSec: course.sectionStart, endSec: endSec, spanCount: endSec - course.sectionStart + 1, course });
+      cursor = endSec + 1;
+    }
+    if (cursor <= 11) {
+      segments.push({ type: 'gap', startSec: cursor, endSec: 11, spanCount: 11 - cursor + 1 });
+    }
+    // 解决相邻课程块颜色冲突
+    const PAL = ['#0B67D1', '#C62828', '#047857', '#B45309', '#5B21B6',
+      '#BE185D', '#0369A1', '#C2410C', '#065F46', '#831843',
+      '#1E40AF', '#9D174D', '#0D9488', '#4338CA', '#A21CAF'];
+    let prevColor = '';
+    for (let i = 0; i < segments.length; i++) {
+      if (segments[i].type === 'course' && segments[i].course) {
+        const preferred = CourseService.courseColor(segments[i].course!.courseId);
+        let resolved = preferred;
+        if (preferred === prevColor) {
+          for (const c of PAL) {
+            if (c !== prevColor) {
+              resolved = c;
+              break;
+            }
+          }
+        }
+        segments[i].displayColor = resolved;
+        segments[i].displayBgColor = CourseService.courseBgColorForHex(resolved);
+        prevColor = resolved;
+      }
+    }
+    return segments;
   }
 
   private iconCommands(name: IconName): string {

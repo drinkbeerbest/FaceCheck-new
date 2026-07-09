@@ -89,6 +89,35 @@ export class CourseService {
     return true;
   }
 
+  static courseColor(courseId: string): string {
+    const PALETTE: string[] = [
+      '#0B67D1', '#C62828', '#047857', '#B45309', '#5B21B6',
+      '#BE185D', '#0369A1', '#C2410C', '#065F46', '#831843',
+      '#1E40AF', '#9D174D', '#0D9488', '#4338CA', '#A21CAF'
+    ];
+    let hash = 0;
+    for (let i = 0; i < courseId.length; i++) {
+      hash = ((hash << 5) - hash) + courseId.charCodeAt(i);
+      hash |= 0;
+    }
+    return PALETTE[Math.abs(hash) % PALETTE.length];
+  }
+
+  static courseBgColor(courseId: string): string {
+    return CourseService.courseBgColorForHex(CourseService.courseColor(courseId));
+  }
+
+  static courseBgColorForHex(hex: string): string {
+    const opacity20: Record<string, string> = {
+      '#0B67D1': '#E7F1FF', '#C62828': '#FDE8E8', '#047857': '#D1FAE5',
+      '#B45309': '#FEF3C7', '#5B21B6': '#EDE9FE', '#BE185D': '#FCE7F3',
+      '#0369A1': '#E0F2FE', '#C2410C': '#FFF7ED', '#065F46': '#ECFDF5',
+      '#831843': '#FDF2F8', '#1E40AF': '#DBEAFE', '#9D174D': '#FCE7F3',
+      '#0D9488': '#CCFBF1', '#4338CA': '#E0E7FF', '#A21CAF': '#FAE8FF'
+    };
+    return opacity20[hex] || '#F3F4F6';
+  }
+
   static deleteCourse(courseId: string): boolean {
     const current = CourseService.courseData();
     const filtered = current.filter((c: Course) => c.courseId !== courseId);

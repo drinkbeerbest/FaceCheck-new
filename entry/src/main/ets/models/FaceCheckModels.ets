@@ -51,6 +51,7 @@ export interface Course {
   endTime: string;
   weekRange: string;
   type: CourseType;
+  color?: string;
 }
 
 export interface AttendanceRecord {
