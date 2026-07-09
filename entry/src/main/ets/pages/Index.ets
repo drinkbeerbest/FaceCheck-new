@@ -479,7 +479,9 @@ struct Index {
 
       // 内容区：三种状态不同展示
       if (this.homeSignState() === 'ready') {
-        this.NextCourseCard(CourseService.activeSignCourse(this.records, this.now())!)
+        if (this.homeActiveCourse()) {
+          this.NextCourseCard(this.homeActiveCourse()!)
+        }
       } else if (this.homeSignState() === 'signed') {
         if (this.isAllTodayOnLeave()) {
           this.LeaveInfoCard()
@@ -3233,6 +3235,9 @@ struct Index {
       this.recognitionMessage = '相机权限被拒绝，请授权后重试';
       return;
     }
+    if (stage === 'recognition') {
+      this.recognitionMessage = '活体检测已通过，请拍摄当前人脸进行比对';
+    }
     this.scheduleFacePreviewStart();
   }
 
@@ -3528,7 +3533,6 @@ struct Index {
     if (result.success) {
       this.faceStageStatus = 'success';
       this.livenessAction = `${result.message}（${source}）`;
-      this.recognitionMessage = result.message;
       this.toast(result.message);
       await this.prepareFaceStage('recognition');
     } else {
@@ -3825,11 +3829,27 @@ struct Index {
     return result;
   }
 
+  // 获取当前可签到的课程（优先 activeSign，其次 nextCourse，兜底 demoCourse）
+  private homeActiveCourse(): Course | undefined {
+    const activeSign = CourseService.activeSignCourse(this.records, this.now());
+    const next = activeSign || CourseService.nextCourse(this.now());
+    // 演示模式下若无匹配课程（如周末全部已签），用 demoCourse 兜底
+    return next || (this.demoSignMode ? this.demoCourse() : undefined);
+  }
+
   private demoCourse(): Course {
     if (!this.demoCourseCache) {
       const allCourses = CourseService.all();
-      const index = Math.floor(Math.random() * allCourses.length);
-      this.demoCourseCache = allCourses[index];
+      const base = new Date();
+      // 用课程对应的调整后日期来检查是否已签到，与 demoNow 保持一致的日期基准
+      const unsigned = allCourses.filter((c: Course) => {
+        const delta = (c.weekDay - base.getDay() + 7) % 7;
+        const adjustedDate = new Date(base.getFullYear(), base.getMonth(), base.getDate() + delta);
+        return !AttendanceService.hasSigned(this.records, c.courseId, AttendanceService.dateKey(adjustedDate));
+      });
+      const pool = unsigned.length > 0 ? unsigned : allCourses;
+      const index = Math.floor(Math.random() * pool.length);
+      this.demoCourseCache = pool[index];
     }
     return this.demoCourseCache;
   }
@@ -3947,7 +3967,11 @@ struct Index {
       AttendanceService.hasSigned(this.records, c.courseId, dateKey) ||
       LeaveService.hasLeave(this.leaveRequests, c.courseId, dateKey)
     );
-    return hasSignedOrLeave ? 'signed' : 'noCourse';
+    if (!hasSignedOrLeave) {
+      return 'noCourse';
+    }
+    // 已有签到记录，保持 signed
+    return 'signed';
   }
 
   // 判断今日是否所有课程都处于请假状态（没有实际签到）

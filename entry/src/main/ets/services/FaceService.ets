@@ -137,7 +137,7 @@ class FaceVisionAdapter implements FaceAdapter {
       const success = result.isSamePerson && result.similarity >= FACE_SIMILARITY_THRESHOLD;
       return {
         success,
-        message: success ? `人脸比对成功，相似度 ${FaceService.percent(result.similarity)}` : `人脸不匹配，签到失败，相似度 ${FaceService.percent(result.similarity)}`,
+        message: success ? `人脸比对成功，相似度 ${FaceService.percent(result.similarity)}` : `人脸检测失败，相似度 ${FaceService.percent(result.similarity)}`,
         method: 'face',
         similarity: result.similarity
       };
