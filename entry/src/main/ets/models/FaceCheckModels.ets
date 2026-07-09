@@ -1,6 +1,7 @@
 import type image from '@ohos.multimedia.image';
 
-export type AttendanceStatus = 'success' | 'fail' | 'pending';
+export type AttendanceStatus = 'success' | 'fail' | 'pending' | 'leave';
+export type LeaveReviewStatus = 'pending' | 'approved' | 'rejected';
 export type VerificationMethod = 'face' | 'mock' | 'cameraMock';
 export type CourseType = 'theory' | 'lab' | 'practice';
 
@@ -8,7 +9,7 @@ export interface SemesterOption {
   label: string;
   value: string;
 }
-export type CourseSignStatus = 'signed' | 'notStarted' | 'active' | 'missed';
+export type CourseSignStatus = 'signed' | 'notStarted' | 'active' | 'missed' | 'leave';
 export type FaceRunMode = 'demoSafe' | 'visionReady';
 export type FaceStageStatus = 'waitingPermission' | 'preparingCamera' | 'cameraPreview' | 'detecting' | 'success' | 'failed' | 'demoMode';
 export type NotificationType = 'signReminder' | 'signSuccess' | 'signFailed' | 'system';
@@ -71,6 +72,18 @@ export interface AttendanceRecord {
   verificationMethod: VerificationMethod;
   message: string;
   absence?: boolean;
+}
+
+export interface LeaveRequest {
+  leaveId: string;
+  courseId: string;
+  userId: string;
+  courseName: string;
+  classroom: string;
+  dateKey: string;       // 请假日期，如 "7月12日"
+  reason: string;
+  status: LeaveReviewStatus;
+  applyTime: string;     // 申请时间，如 "7月9日 14:30"
 }
 
 export interface AttendanceStats {

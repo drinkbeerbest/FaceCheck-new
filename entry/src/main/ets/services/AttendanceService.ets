@@ -1,4 +1,4 @@
-import { AttendanceRecord, AttendanceStats, Course, CourseSignState, VerificationMethod } from '../models/FaceCheckModels';
+import { AttendanceRecord, AttendanceStats, Course, CourseSignState, LeaveRequest, VerificationMethod } from '../models/FaceCheckModels';
 
 const BLUE = '#0B67D1';
 const BLUE_SOFT = '#E7F1FF';
@@ -78,7 +78,7 @@ export class AttendanceService {
     ];
   }
 
-  static stats(records: AttendanceRecord[], courses: Course[] = [], now: Date = new Date()): AttendanceStats {
+  static stats(records: AttendanceRecord[], courses: Course[] = [], now: Date = new Date(), leaveRequests: LeaveRequest[] = []): AttendanceStats {
     const successCount = records.filter((record: AttendanceRecord) => record.status === 'success').length;
     const signedKeys = new Set<string>();
     records.forEach((record: AttendanceRecord) => {
@@ -102,6 +102,13 @@ export class AttendanceService {
     });
 
     const todayKey = AttendanceService.dateKey(now);
+    const leaveSet = new Set<string>();
+    leaveRequests.forEach((lr: LeaveRequest) => {
+      if (lr.dateKey === todayKey) {
+        leaveSet.add(AttendanceService.courseDateKey(lr.courseId, lr.dateKey));
+      }
+    });
+
     const nowMinutes = now.getHours() * 60 + now.getMinutes();
     courses.forEach((course: Course) => {
       if (course.weekDay !== now.getDay()) {
@@ -109,6 +116,10 @@ export class AttendanceService {
       }
       const key = AttendanceService.courseDateKey(course.courseId, todayKey);
       if (signedKeys.has(key)) {
+        return;
+      }
+      // 已请假的课程不计入缺勤
+      if (leaveSet.has(key)) {
         return;
       }
       if (nowMinutes > AttendanceService.toMinutes(course.startTime) + 10) {

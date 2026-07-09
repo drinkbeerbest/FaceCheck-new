@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
-import { AttendanceRecord, BadgeItem, Course, FaceProfile, FeedbackItem, NotificationItem, StudentAccount } from '../models/FaceCheckModels';
+import { AttendanceRecord, BadgeItem, Course, FaceProfile, FeedbackItem, LeaveRequest, NotificationItem, StudentAccount } from '../models/FaceCheckModels';
 
 const STORE_NAME = 'facecheck_demo_store';
 const KEY_LOGGED_IN = 'logged_in';
@@ -111,6 +111,30 @@ export class PreferenceStore {
     }
     try {
       this.pref.putSync(this.studentKey('attendance_records', studentId), JSON.stringify(records));
+      await this.pref.flush();
+    } catch (err) {
+    }
+  }
+
+  leaveRequests(studentId: string): LeaveRequest[] {
+    if (!this.pref) {
+      return [];
+    }
+    try {
+      const raw = this.pref.getSync(this.studentKey('leave_requests', studentId), '[]') as string;
+      const parsed = JSON.parse(raw) as LeaveRequest[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      return [];
+    }
+  }
+
+  async saveLeaveRequests(studentId: string, requests: LeaveRequest[]): Promise<void> {
+    if (!this.pref) {
+      return;
+    }
+    try {
+      this.pref.putSync(this.studentKey('leave_requests', studentId), JSON.stringify(requests));
       await this.pref.flush();
     } catch (err) {
     }

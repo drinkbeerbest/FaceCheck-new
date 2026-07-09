@@ -3,7 +3,7 @@ import { promptAction } from '@kit.ArkUI';
 import image from '@ohos.multimedia.image';
 import photoAccessHelper from '@ohos.file.photoAccessHelper';
 import { SECTION_TIMES } from '../data/CourseData';
-import { ANONYMOUS_USER, AttendanceRecord, AttendanceStats, BadgeItem, Course, CourseSignState, FaceServiceResult, FaceStageStatus, FeedbackItem, FeedbackType, FeedbackTypeOption, FEEDBACK_TYPE_OPTIONS, GEOFENCE_CENTER_NAME, GEOFENCE_RADIUS_METERS, GeofenceCheckResult, NotificationItem, SemesterOption, type UpdateLogItem, type VersionInfo, User, VerificationMethod } from '../models/FaceCheckModels';
+import { ANONYMOUS_USER, AttendanceRecord, AttendanceStats, AttendanceStatus, BadgeItem, Course, CourseSignState, FaceServiceResult, FaceStageStatus, FeedbackItem, FeedbackType, FeedbackTypeOption, FEEDBACK_TYPE_OPTIONS, GEOFENCE_CENTER_NAME, GEOFENCE_RADIUS_METERS, GeofenceCheckResult, LeaveRequest, NotificationItem, SemesterOption, type UpdateLogItem, type VersionInfo, User, VerificationMethod } from '../models/FaceCheckModels';
 import { AccountService } from '../services/AccountService';
 import { AttendanceService } from '../services/AttendanceService';
 import { CameraPermissionService } from '../services/CameraPermissionService';
@@ -13,6 +13,7 @@ import { FaceCaptureService, CapturedFaceImage } from '../services/FaceCaptureSe
 import { FaceReferenceStore } from '../services/FaceReferenceStore';
 import { FaceService } from '../services/FaceService';
 import { FeedbackService } from '../services/FeedbackService';
+import { LeaveService } from '../services/LeaveService';
 import { NotificationService } from '../services/NotificationService';
 import { PreferenceStore } from '../services/PreferenceStore';
 import { LocationService } from '../services/LocationService';
@@ -23,6 +24,7 @@ import EntryFormAbility from '../entryformability/EntryFormAbility';
 type MainTab = 'home' | 'records' | 'profile' | 'settings';
 type FlowPage = 'main' | 'login' | 'register' | 'enroll' | 'liveness' | 'recognition' | 'schedule' | 'privacy' | 'courseEdit' | 'courseImport' | 'notifications' | 'badge' | 'feedback' | 'version';
 type RecordFilter = 'today' | 'week' | 'earlier';
+type RecordStatusFilter = 'all' | 'success' | 'fail' | 'leave';
 type IconName = 'house' | 'calendar-check' | 'person' | 'gear' | 'bell' | 'book' | 'award' | 'shield' | 'box-arrow-right' | 'person-circle' | 'lock' | 'card' | 'chevron-right' | 'camera' | 'eye' | 'check-circle' | 'x-circle' | 'clock';
 
 interface CourseTypeOption {
@@ -88,7 +90,7 @@ struct Index {
   @State records: AttendanceRecord[] = [];
   @State recordFilter: RecordFilter = 'today';
   @State showAllRecords: boolean = false;
-  @State recordStatusFilter: 'all' | 'success' | 'fail' = 'all';
+  @State recordStatusFilter: RecordStatusFilter = 'all';
   @State loginStudentId: string = '202440011987';
   @State loginPassword: string = '';
   @State loginError: string = '';
@@ -155,6 +157,12 @@ struct Index {
   @State locationPermissionGranted: boolean = false;
   @State mockMode: number = 0; // 0=无模拟 1=模拟校内 -1=模拟校外
 
+  // 请假功能状态
+  @State leaveRequests: LeaveRequest[] = [];
+  @State showLeaveDialog: boolean = false;
+  @State leaveReason: string = '';
+  @State selectedLeaveCourse: Course | null = null;
+
   aboutToAppear(): void {
     const context = getContext(this) as common.UIAbilityContext;
     this.store.init(context).then(() => {
@@ -173,6 +181,7 @@ struct Index {
       this.faceRegistered = this.loggedIn ? this.user.faceRegistered : false;
       this.darkMode = this.store.isDarkMode();
       this.records = this.loggedIn ? this.store.records(this.currentStudentId) : [];
+      this.leaveRequests = this.loggedIn ? this.store.leaveRequests(this.currentStudentId) : [];
 
       // 加载课程数据
       this.refreshCourses();
@@ -304,6 +313,11 @@ struct Index {
         this.VersionPage()
       } else {
         this.MainShell()
+      }
+
+      // 请假对话框覆盖层
+      if (this.showLeaveDialog && this.selectedLeaveCourse) {
+        this.LeaveDialog()
       }
     }
     .width('100%')
@@ -447,7 +461,11 @@ struct Index {
     Column({ space: 20 }) {
       // 人脸扫描动效环 — 根据状态显示不同颜色/图标
       if (this.homeSignState() === 'signed') {
-        this.FaceOrbit(GREEN, GREEN_SOFT, '✅', '已签')
+        if (this.isAllTodayOnLeave()) {
+          this.FaceOrbit('#F0A030', '#FFF8EC', '📝', '请假')
+        } else {
+          this.FaceOrbit(GREEN, GREEN_SOFT, '✅', '已签')
+        }
       } else if (this.homeSignState() === 'ready') {
         this.FaceOrbit(BLUE, BLUE_SOFT, '👤', 'ID')
       } else {
@@ -463,7 +481,11 @@ struct Index {
       if (this.homeSignState() === 'ready') {
         this.NextCourseCard(CourseService.activeSignCourse(this.records, this.now())!)
       } else if (this.homeSignState() === 'signed') {
-        this.SignedInfoCard()
+        if (this.isAllTodayOnLeave()) {
+          this.LeaveInfoCard()
+        } else {
+          this.SignedInfoCard()
+        }
       } else {
         Text(this.homeDescription())
           .fontSize(15)
@@ -478,7 +500,11 @@ struct Index {
         Row({ space: 10 }) {
           // 签到状态 Pill
           if (this.homeSignState() === 'signed') {
-            this.StatusPill('face', '签到完成', GREEN, GREEN_SOFT)
+            if (this.isAllTodayOnLeave()) {
+              this.StatusPill('face', '已请假', '#F0A030', '#FFF8EC')
+            } else {
+              this.StatusPill('face', '签到完成', GREEN, GREEN_SOFT)
+            }
           } else {
             this.StatusPill('face', this.faceRegistered ? '人脸已就绪' : '待录入人脸',
               this.faceRegistered ? GREEN : RED,
@@ -545,6 +571,41 @@ struct Index {
     .backgroundColor(this.surface())
     .borderRadius(12)
     .shadow(this.cardShadow())
+  }
+
+  @Builder
+  LeaveInfoCard() {
+    Column({ space: 6 }) {
+      Row({ space: 8 }) {
+        Text('📝')
+          .fontSize(14)
+        Text('今日课程已全部请假')
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#F0A030')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .width('100%')
+
+      Row({ space: 8 }) {
+        Text('⏳')
+          .fontSize(12)
+        Text('等待老师审核中')
+          .fontSize(13)
+          .fontColor(this.secondaryText())
+          .layoutWeight(1)
+        Text('审核中')
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#F0A030')
+      }
+      .width('100%')
+    }
+    .width('78%')
+    .padding({ top: 14, bottom: 14, left: 18, right: 18 })
+    .backgroundColor('#FFF8EC')
+    .borderRadius(10)
   }
 
   @Builder
@@ -748,9 +809,11 @@ struct Index {
 
       if (this.recordStatusFilter !== 'all') {
         Row({ space: 10 }) {
-          Text(this.recordStatusFilter === 'success' ? '已筛选：已到记录' : '已筛选：缺勤记录')
+          Text(this.recordStatusFilter === 'success' ? '已筛选：已到记录' :
+            (this.recordStatusFilter === 'leave' ? '已筛选：请假记录' : '已筛选：缺勤记录'))
             .fontSize(14)
-            .fontColor(this.recordStatusFilter === 'success' ? GREEN : RED)
+            .fontColor(this.recordStatusFilter === 'success' ? GREEN :
+              (this.recordStatusFilter === 'leave' ? '#F0A030' : RED))
           Text('清除筛选')
             .fontSize(13)
             .fontColor(BLUE)
@@ -795,6 +858,9 @@ struct Index {
       })
       this.StatCard('缺勤', `${this.stats().failCount}`, RED, RED_SOFT, () => {
         this.recordStatusFilter = this.recordStatusFilter === 'fail' ? 'all' : 'fail';
+      })
+      this.StatCard('请假', `${this.leaveRequests.length}`, '#F0A030', '#FFF8EC', () => {
+        this.recordStatusFilter = this.recordStatusFilter === 'leave' ? 'all' : 'leave';
       })
       this.StatCard('出勤率', this.stats().rateText, BLUE, BLUE_SOFT)
     }
@@ -1975,12 +2041,37 @@ struct Index {
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
-      this.SignStatusButton(course)
+      Column({ space: 4 }) {
+        this.SignStatusButton(course)
+        if (this.courseSignState(course).status !== 'leave' && this.courseSignState(course).status !== 'signed') {
+          this.LeaveButton(course)
+        }
+      }
+      .alignItems(HorizontalAlign.End)
     }
     .width('100%')
     .padding(16)
     .backgroundColor(this.surfaceAlt())
     .borderRadius(8)
+  }
+
+  @Builder
+  LeaveButton(course: Course) {
+    Text('请假')
+      .fontSize(12)
+      .fontWeight(FontWeight.Medium)
+      .fontColor('#F0A030')
+      .textAlign(TextAlign.Center)
+      .width(104)
+      .height(30)
+      .borderRadius(6)
+      .backgroundColor('#FFF8EC')
+      .border({ width: 1, color: '#F0A030', style: BorderStyle.Dashed })
+      .onClick(() => {
+        this.selectedLeaveCourse = course;
+        this.leaveReason = '';
+        this.showLeaveDialog = true;
+      })
   }
 
   @Builder
@@ -2155,15 +2246,27 @@ struct Index {
   @Builder
   RecordCard(record: AttendanceRecord) {
     Row({ space: 14 }) {
-      Text(record.status === 'success' ? 'OK' : 'NO')
-        .fontSize(14)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(record.status === 'success' ? GREEN : RED)
-        .textAlign(TextAlign.Center)
-        .width(46)
-        .height(46)
-        .borderRadius(23)
-        .backgroundColor(record.status === 'success' ? GREEN_SOFT : RED_SOFT)
+      if (record.status === 'leave') {
+        Text('假')
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#F0A030')
+          .textAlign(TextAlign.Center)
+          .width(46)
+          .height(46)
+          .borderRadius(23)
+          .backgroundColor('#FFF8EC')
+      } else {
+        Text(record.status === 'success' ? 'OK' : 'NO')
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(record.status === 'success' ? GREEN : RED)
+          .textAlign(TextAlign.Center)
+          .width(46)
+          .height(46)
+          .borderRadius(23)
+          .backgroundColor(record.status === 'success' ? GREEN_SOFT : RED_SOFT)
+      }
       Column({ space: 6 }) {
         Text(record.courseName)
           .fontSize(18)
@@ -2172,6 +2275,11 @@ struct Index {
         Text(`${record.time}  ${record.classroom}`)
           .fontSize(14)
           .fontColor(this.secondaryText())
+        if (record.status === 'leave') {
+          Text(record.message)
+            .fontSize(13)
+            .fontColor('#F0A030')
+        }
         if (record.status === 'fail') {
           Text(record.message)
             .fontSize(13)
@@ -2180,17 +2288,140 @@ struct Index {
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
-      this.Pill(
-        record.status === 'success' ? '成功' : (this.isAbsenceRecord(record) ? '缺勤' : '签到失败'),
-        record.status === 'success' ? GREEN : RED,
-        record.status === 'success' ? GREEN_SOFT : RED_SOFT
-      )
+      if (record.status === 'leave') {
+        this.Pill('请假', '#F0A030', '#FFF8EC')
+      } else {
+        this.Pill(
+          record.status === 'success' ? '成功' : (this.isAbsenceRecord(record) ? '缺勤' : '签到失败'),
+          record.status === 'success' ? GREEN : RED,
+          record.status === 'success' ? GREEN_SOFT : RED_SOFT
+        )
+      }
     }
     .width('100%')
     .padding(16)
     .backgroundColor(this.surface())
     .borderRadius(8)
-    .border({ width: 1, color: record.status === 'success' ? LINE : '#FFD0D0' })
+    .border({ width: 1, color: record.status === 'leave' ? '#F0D090' : (record.status === 'success' ? LINE : '#FFD0D0') })
+  }
+
+  @Builder
+  LeaveDialog() {
+    Column() {
+      this.LeaveDialogContent()
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('rgba(0,0,0,0.5)')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .onClick(() => {
+      this.showLeaveDialog = false;
+      this.selectedLeaveCourse = null;
+    })
+  }
+
+  // 请假对话框内容（用于 .onClick 避免穿透关闭）
+  @Builder
+  LeaveDialogContent() {
+    Column({ space: 18 }) {
+      Row() {
+        Text('课程请假')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(TEXT)
+        Blank()
+        Text('✕')
+          .fontSize(20)
+          .fontColor(MUTED)
+          .onClick(() => {
+            this.showLeaveDialog = false;
+            this.selectedLeaveCourse = null;
+          })
+      }
+      .width('100%')
+
+      // 课程信息
+      Column({ space: 6 }) {
+        Text(this.selectedLeaveCourse?.courseName || '')
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(TEXT)
+        Text(`${this.selectedLeaveCourse?.startTime}-${this.selectedLeaveCourse?.endTime}  ${this.selectedLeaveCourse?.classroom}`)
+          .fontSize(14)
+          .fontColor(MUTED)
+        Text(`授课教师：${this.selectedLeaveCourse?.teacher || ''}`)
+          .fontSize(14)
+          .fontColor(MUTED)
+      }
+      .width('100%')
+      .padding({ top: 12, bottom: 12, left: 14, right: 14 })
+      .backgroundColor('#F5F7FC')
+      .borderRadius(8)
+
+      // 请假原因输入
+      Column({ space: 8 }) {
+        Text('请假原因')
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(TEXT)
+        TextArea({ text: this.leaveReason, placeholder: '请详细说明请假原因，以便老师审核…' })
+          .fontSize(14)
+          .height(100)
+          .width('100%')
+          .borderRadius(8)
+          .backgroundColor(CARD)
+          .border({ width: 1, color: LINE })
+          .padding(12)
+          .onChange((value: string) => {
+            this.leaveReason = value;
+          })
+      }
+      .width('100%')
+
+      // 提示文字
+      Text('提交后请假状态将标注为"审核中"，老师审核通过后方可生效。')
+        .fontSize(12)
+        .fontColor('#F0A030')
+        .lineHeight(18)
+        .width('100%')
+
+      // 按钮
+      Row({ space: 12 }) {
+        Button('取消')
+          .layoutWeight(1)
+          .height(44)
+          .fontSize(15)
+          .fontColor(MUTED)
+          .backgroundColor('#EEF2F8')
+          .borderRadius(8)
+          .onClick(() => {
+            this.showLeaveDialog = false;
+            this.selectedLeaveCourse = null;
+          })
+        Button('提交申请')
+          .layoutWeight(1)
+          .height(44)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Color.White)
+          .backgroundColor('#F0A030')
+          .borderRadius(8)
+          .enabled(this.leaveReason.trim().length > 0)
+          .onClick(() => {
+            this.handleLeaveSubmit();
+          })
+      }
+      .width('100%')
+    }
+    .width('86%')
+    .padding(22)
+    .backgroundColor(CARD)
+    .borderRadius(16)
+    .shadow({ radius: 24, color: '#30000000' })
+    .onClick(() => {
+      // 阻止点击穿透到遮罩
+    })
   }
 
   @Builder
@@ -2916,6 +3147,10 @@ struct Index {
       this.toast('今日该课程已签到');
       return;
     }
+    if (state.status === 'leave') {
+      this.toast('该课程已提交请假申请，无法签到');
+      return;
+    }
     if (!state.canSign) {
       this.toast(state.hint);
       return;
@@ -2936,6 +3171,25 @@ struct Index {
 
     this.activeCourseId = course.courseId;
     this.startLivenessFlow();
+  }
+
+  private handleLeaveSubmit(): void {
+    if (!this.selectedLeaveCourse || this.leaveReason.trim().length === 0) {
+      return;
+    }
+    const dateKey = AttendanceService.dateKey(this.now());
+    const leave = LeaveService.createLeaveRequest(
+      this.selectedLeaveCourse,
+      this.user.userId,
+      dateKey,
+      this.leaveReason.trim()
+    );
+    this.leaveRequests = [leave, ...this.leaveRequests];
+    this.store.saveLeaveRequests(this.currentStudentId, this.leaveRequests);
+    this.showLeaveDialog = false;
+    this.selectedLeaveCourse = null;
+    this.leaveReason = '';
+    this.toast('请假申请已提交，等待老师审核');
   }
 
   private startEnrollFlow(): void {
@@ -3489,10 +3743,26 @@ struct Index {
     if (this.recordFilter === 'today') {
       const today = AttendanceService.dateKey(this.now());
       records = this.records.filter((record: AttendanceRecord) => record.displayDate === today || record.time.indexOf('今天') === 0);
+      // 筛选请假时，将 LeaveRequest 转为 AttendanceRecord 展示
+      if (this.recordStatusFilter === 'leave') {
+        return this.leaveRequestsAsRecords(this.leaveRequests.filter((lr: LeaveRequest) => lr.dateKey === today));
+      }
     } else if (this.recordFilter === 'week') {
       records = this.records.filter((record: AttendanceRecord) => record.displayDate === '本周' || record.displayDate === '昨天');
+      if (this.recordStatusFilter === 'leave') {
+        const todayKey = AttendanceService.dateKey(this.now());
+        // 本周请假：排除今天的（今天已在今日筛选），本周的日期需要根据实际存储
+        return this.leaveRequestsAsRecords(this.leaveRequests.filter((lr: LeaveRequest) =>
+          lr.dateKey === '本周' || lr.dateKey === '昨天' || lr.dateKey === todayKey
+        ));
+      }
     } else {
       records = this.records.filter((record: AttendanceRecord) => record.displayDate !== AttendanceService.dateKey(this.now()) && record.displayDate !== '本周' && record.displayDate !== '昨天');
+      if (this.recordStatusFilter === 'leave') {
+        return this.leaveRequestsAsRecords(this.leaveRequests.filter((lr: LeaveRequest) =>
+          lr.dateKey !== AttendanceService.dateKey(this.now()) && lr.dateKey !== '本周' && lr.dateKey !== '昨天'
+        ));
+      }
     }
     if (this.recordStatusFilter === 'success') {
       records = records.filter((record: AttendanceRecord) => record.status === 'success');
@@ -3511,6 +3781,23 @@ struct Index {
     return records;
   }
 
+  // 将 LeaveRequest 列表转为 AttendanceRecord 列表用于展示
+  private leaveRequestsAsRecords(leaveReqs: LeaveRequest[]): AttendanceRecord[] {
+    return leaveReqs.map((lr: LeaveRequest): AttendanceRecord => ({
+      recordId: lr.leaveId,
+      userId: lr.userId,
+      courseId: lr.courseId,
+      courseName: lr.courseName,
+      classroom: lr.classroom,
+      time: lr.applyTime,
+      displayDate: lr.dateKey,
+      status: 'leave',
+      verificationMethod: 'face',
+      message: `请假原因：${lr.reason}`,
+      absence: false
+    }));
+  }
+
   private isAbsenceRecord(record: AttendanceRecord): boolean {
     return AttendanceService.isAbsenceRecord(record);
   }
@@ -3521,7 +3808,7 @@ struct Index {
   }
 
   private stats(): AttendanceStats {
-    return AttendanceService.stats(this.records, CourseService.all(), this.now());
+    return AttendanceService.stats(this.records, CourseService.all(), this.now(), this.leaveRequests);
   }
 
   private now(): Date {
@@ -3640,22 +3927,42 @@ struct Index {
     return 'gear';
   }
 
-  // 首页三种状态：noCourse = 无课 | ready = 可签到 | signed = 已签到
+  // 首页三种状态：noCourse = 无课 | ready = 可签到 | signed = 已签到/已请假
   private homeSignState(): 'noCourse' | 'ready' | 'signed' {
     if (!this.loggedIn || !this.faceRegistered) {
       return 'noCourse';
     }
+    const dateKey = AttendanceService.dateKey(this.now());
+    // 先检查是否有可签到的课程（排除已请假的）
     const readyCourse = CourseService.activeSignCourse(this.records, this.now());
-    if (readyCourse) {
+    if (readyCourse && !LeaveService.hasLeave(this.leaveRequests, readyCourse.courseId, dateKey)) {
       return 'ready';
     }
     const today = CourseService.today(this.now());
     if (today.length === 0) {
       return 'noCourse';
     }
+    // 已签到或已请假的都算 signed（表示有处理状态）
+    const hasSignedOrLeave = today.some((c: Course) =>
+      AttendanceService.hasSigned(this.records, c.courseId, dateKey) ||
+      LeaveService.hasLeave(this.leaveRequests, c.courseId, dateKey)
+    );
+    return hasSignedOrLeave ? 'signed' : 'noCourse';
+  }
+
+  // 判断今日是否所有课程都处于请假状态（没有实际签到）
+  private isAllTodayOnLeave(): boolean {
     const dateKey = AttendanceService.dateKey(this.now());
+    const today = CourseService.today(this.now());
+    if (today.length === 0) {
+      return false;
+    }
     const hasSigned = today.some((c: Course) => AttendanceService.hasSigned(this.records, c.courseId, dateKey));
-    return hasSigned ? 'signed' : 'noCourse';
+    if (hasSigned) {
+      return false;
+    }
+    // 所有课都请假了，或者部分请假 + 部分未签到
+    return today.every((c: Course) => LeaveService.hasLeave(this.leaveRequests, c.courseId, dateKey));
   }
 
   // 获取已签到课程的信息（返回 { course, signTime } 或 null）
@@ -3686,7 +3993,7 @@ struct Index {
     }
     const state = this.homeSignState();
     if (state === 'signed') {
-      return '签到完成';
+      return this.isAllTodayOnLeave() ? '课程已请假' : '签到完成';
     }
     if (state === 'ready') {
       return '准备上课签到';
@@ -3703,7 +4010,7 @@ struct Index {
     }
     const state = this.homeSignState();
     if (state === 'signed') {
-      return '今日签到已完成，可以查看历史签到记录。';
+      return this.isAllTodayOnLeave() ? '请假申请已提交，请耐心等待老师审核。' : '今日签到已完成，可以查看历史签到记录。';
     }
     if (state === 'ready') {
       return '';
@@ -3729,7 +4036,8 @@ struct Index {
   }
 
   private courseSignState(course: Course): CourseSignState {
-    return AttendanceService.courseSignState(course, this.records, this.now());
+    const baseState = AttendanceService.courseSignState(course, this.records, this.now());
+    return LeaveService.courseSignStateWithLeave(course, this.leaveRequests, AttendanceService.dateKey(this.now()), baseState);
   }
 
   // 计算某天课程的节次分段（用于课表单元格合并渲染，并确保相邻课程块颜色不重复）
