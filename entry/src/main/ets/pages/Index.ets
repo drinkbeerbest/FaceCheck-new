@@ -112,8 +112,11 @@ struct Index {
   @State cameraPreviewReady: boolean = false;
   @State faceModeLabel: string = FaceService.modeLabel();
   @State demoSignMode: boolean = false;
+  @State demoSignCompleted: boolean = false;  // 演示模式下签到成功后显示"签到完成"界面
   @State userAvatarPath: string = '';  // 用户自定义头像路径
+  @State homeTick: number = 0;  // 定时器驱动，每30秒自增，使首页根据真实时间自动刷新状态
   private demoCourseCache: Course | null = null;  // 缓存随机选中的演示课程
+  private homeTimer: number = -1;  // 首页状态刷新定时器 ID
   // 课程编辑状态
   @State editCourseId: string = '';
   @State editCourseName: string = '';
@@ -202,6 +205,11 @@ struct Index {
       if (this.loggedIn) {
         ReminderService.scheduleTodayReminders(this.store, context, this.now(), this.demoSignMode);
       }
+
+      // 首页状态定时刷新：每30秒根据真实时间自动切换 ready/signed/noCourse
+      this.homeTimer = setInterval(() => {
+        this.homeTick += 1;
+      }, 30000);
     });
   }
 
@@ -238,6 +246,10 @@ struct Index {
   }
 
   aboutToDisappear(): void {
+    if (this.homeTimer !== -1) {
+      clearInterval(this.homeTimer);
+      this.homeTimer = -1;
+    }
     FaceCaptureService.releasePreview();
   }
 
@@ -377,13 +389,16 @@ struct Index {
   @Builder
   HomePage() {
     Column({ space: 18 }) {
-      if (!this.loggedIn) {
-        this.LoginPromptCard()
-      } else {
-        this.UserSummaryCard()
+      // homeTick 定时自增，驱使首页根据真实时间自动刷新状态（ready/signed/noCourse）
+      if (this.homeTick >= 0) {
+        if (!this.loggedIn) {
+          this.LoginPromptCard()
+        } else {
+          this.UserSummaryCard()
+        }
+        this.HomeActionCard()
+        this.TodayCoursesCard()
       }
-      this.HomeActionCard()
-      this.TodayCoursesCard()
     }
     .width('100%')
   }
@@ -2617,6 +2632,7 @@ struct Index {
         .selectedColor(BLUE)
         .onChange((isOn: boolean) => {
           this.demoSignMode = isOn;
+          this.demoSignCompleted = false;
           this.showAllRecords = false;
           const ctx = getContext(this) as common.UIAbilityContext;
           if (isOn) {
@@ -3123,14 +3139,27 @@ struct Index {
       this.startEnrollFlow();
       return;
     }
-    // 已签到状态 → 跳转签到记录页
+    // 已签到状态
     if (this.homeSignState() === 'signed') {
-      this.currentTab = 'records';
-      return;
+      if (this.demoSignMode) {
+        // 演示模式下：清除签到完成状态，重新挑选课程开始新一轮签到
+        this.demoSignCompleted = false;
+        this.demoCourseCache = null;
+      } else {
+        this.currentTab = 'records';
+        return;
+      }
     }
-    const course = CourseService.activeSignCourse(this.records, this.now());
+    // 演示模式：清除缓存重新挑选未签到课程，绕过真实时间签到窗口校验
+    let course: Course | undefined;
+    if (this.demoSignMode) {
+      this.demoCourseCache = null;
+      course = this.demoCourse();
+    } else {
+      course = CourseService.activeSignCourse(this.records, this.now());
+    }
     if (!course) {
-      this.toast(this.todayCourses().length === 0 ? '今日无课程' : '当前不在签到时间内');
+      this.toast(this.demoSignMode ? '无可用于演示的课程' : (this.todayCourses().length === 0 ? '今日无课程' : '当前不在签到时间内'));
       return;
     }
 
@@ -3306,11 +3335,31 @@ struct Index {
     setTimeout(() => {
       this.startFacePreview(token);
     }, 800);
+    // 安全兜底：12 秒后若仍未完成准备，强制标记为 failed，防止按钮永久禁用
+    setTimeout(() => {
+      if (this.previewStartSerial === token && this.faceStageStatus === 'preparingCamera') {
+        this.previewStartSerial += 1;
+        this.faceStageStatus = 'failed';
+        this.cameraPreviewReady = false;
+        this.cameraReady = false;
+        const msg = '相机预览超时未就绪，请返回重试';
+        this.recognitionMessage = msg;
+        this.flowMessage = msg;
+      }
+    }, 12000);
   }
 
   private async startFacePreview(token?: number): Promise<void> {
+    // 已经就绪则跳过，防止 timer 回调等重复初始化覆盖已有状态
+    if (this.cameraPreviewReady && this.faceStageStatus === 'cameraPreview') {
+      return;
+    }
     const effectiveToken = token !== undefined ? token : this.previewStartSerial;
     if (this.flowPage !== 'enroll' && this.flowPage !== 'recognition') {
+      // 不在人脸采集页面，避免状态卡在 preparingCamera
+      if (this.faceStageStatus === 'preparingCamera') {
+        this.faceStageStatus = 'failed';
+      }
       return;
     }
     const context = getContext(this) as common.UIAbilityContext;
@@ -3319,6 +3368,12 @@ struct Index {
     let surfaceId = '';
     for (let retry = 0; retry < 12; retry++) {
       if (effectiveToken !== this.previewStartSerial) {
+        // 令牌失效（如用户返回），确保状态不卡在 preparingCamera
+        if (this.faceStageStatus === 'preparingCamera') {
+          this.faceStageStatus = 'failed';
+          this.recognitionMessage = '预览已被取消，请返回重试';
+          this.flowMessage = '预览已被取消，请返回重试';
+        }
         return;
       }
       surfaceId = this.currentFaceSurfaceId();
@@ -3340,6 +3395,11 @@ struct Index {
     // 阶段二：启动前置相机预览（最多 3 次 × 400ms）
     for (let retry = 0; retry < 3; retry++) {
       if (effectiveToken !== this.previewStartSerial) {
+        if (this.faceStageStatus === 'preparingCamera') {
+          this.faceStageStatus = 'failed';
+          this.recognitionMessage = '预览已被取消，请返回重试';
+          this.flowMessage = '预览已被取消，请返回重试';
+        }
         return;
       }
       const ready = await FaceCaptureService.startPreview(context, surfaceId);
@@ -3544,6 +3604,18 @@ struct Index {
   }
 
   private async finishRecognition(): Promise<void> {
+    // 防御：若相机预览尚未就绪，先尝试启动，仍然失败则给出明确提示
+    if (this.faceStageStatus === 'preparingCamera' || (!this.cameraPreviewReady && this.faceStageStatus !== 'failed')) {
+      this.faceStageStatus = 'detecting';
+      this.recognitionMessage = '正在准备相机，请稍候…';
+      await this.startFacePreview();
+      if (!this.cameraPreviewReady) {
+        this.faceStageStatus = 'failed';
+        this.recognitionMessage = '相机未就绪，请返回后重新进入';
+        this.toast('相机未就绪，请返回后重试');
+        return;
+      }
+    }
     this.faceStageStatus = 'detecting';
     this.recognitionMessage = '正在拍摄并比对当前人脸';
     const context = getContext(this) as common.UIAbilityContext;
@@ -3676,6 +3748,17 @@ struct Index {
 
       this.activeCourseId = '';
       this.stopFacePreview();
+      // 演示模式下：保留 demoCourseCache 以显示签到成功界面，5秒后自动重置为准备签到
+      if (this.demoSignMode) {
+        this.demoSignCompleted = true;
+        // 5秒后自动回到"准备开始签到"状态（模拟"下一节课上课时间到了"）
+        setTimeout(() => {
+          if (this.demoSignMode && this.demoSignCompleted) {
+            this.demoSignCompleted = false;
+            this.demoCourseCache = null;
+          }
+        }, 5000);
+      }
       this.flowPage = 'main';
       this.currentTab = 'home';
     } finally {
@@ -3952,26 +4035,45 @@ struct Index {
     if (!this.loggedIn || !this.faceRegistered) {
       return 'noCourse';
     }
-    const dateKey = AttendanceService.dateKey(this.now());
-    // 先检查是否有可签到的课程（排除已请假的）
-    const readyCourse = CourseService.activeSignCourse(this.records, this.now());
-    if (readyCourse && !LeaveService.hasLeave(this.leaveRequests, readyCourse.courseId, dateKey)) {
-      return 'ready';
+    const now = this.now();
+    const dateKey = AttendanceService.dateKey(now);
+
+    // 演示模式下：签到完成后显示"签到完成"界面，否则显示"准备签到"
+    if (this.demoSignMode) {
+      return this.demoSignCompleted ? 'signed' : 'ready';
     }
-    const today = CourseService.today(this.now());
+
+    const today = CourseService.today(now);
     if (today.length === 0) {
       return 'noCourse';
     }
-    // 已签到或已请假的都算 signed（表示有处理状态）
-    const hasSignedOrLeave = today.some((c: Course) =>
+
+    // 检查是否所有课程都已完成（签到或请假）
+    const allDone = today.every((c: Course) =>
       AttendanceService.hasSigned(this.records, c.courseId, dateKey) ||
       LeaveService.hasLeave(this.leaveRequests, c.courseId, dateKey)
     );
-    if (!hasSignedOrLeave) {
-      return 'noCourse';
+    if (allDone) {
+      return 'signed';
     }
-    // 已有签到记录，保持 signed
-    return 'signed';
+
+    // 检查是否还有可以参加的未完成课程（未签到、未请假、且尚未结束）
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const hasRemaining = today.some((c: Course) => {
+      if (AttendanceService.hasSigned(this.records, c.courseId, dateKey)) {
+        return false;
+      }
+      if (LeaveService.hasLeave(this.leaveRequests, c.courseId, dateKey)) {
+        return false;
+      }
+      // 课程尚未结束，仍有签到机会
+      return CourseService.toMinutes(c.endTime) > nowMinutes;
+    });
+    if (!hasRemaining) {
+      return 'noCourse'; // 所有未签到课程都已结束 → 今日无可参加课程
+    }
+
+    return 'ready';
   }
 
   // 判断今日是否所有课程都处于请假状态（没有实际签到）
@@ -4037,6 +4139,21 @@ struct Index {
       return this.isAllTodayOnLeave() ? '请假申请已提交，请耐心等待老师审核。' : '今日签到已完成，可以查看历史签到记录。';
     }
     if (state === 'ready') {
+      // 检查是否在签到窗口内，若未开始则显示倒计时提示
+      const activeCourse = CourseService.activeSignCourse(this.records, this.now());
+      if (activeCourse) {
+        return ''; // 签到窗口开放中，NextCourseCard 已展示课程信息
+      }
+      const nextCourse = this.homeActiveCourse();
+      if (nextCourse) {
+        const diff = CourseService.toMinutes(nextCourse.startTime) - (this.now().getHours() * 60 + this.now().getMinutes());
+        if (diff > 0 && diff <= 30) {
+          return `距离下一节课还有约 ${diff} 分钟，请做好准备`;
+        }
+        if (diff > 30) {
+          return ''; // 时间还早，显示简洁状态
+        }
+      }
       return '';
     }
     return '今天暂无课程安排，可以查看课表或签到记录。';
