@@ -224,7 +224,7 @@ struct Index {
   onBackPress(): boolean {
     if (this.flowPage !== 'main') {
       if (this.flowPage === 'enroll' || this.flowPage === 'liveness' || this.flowPage === 'recognition') {
-        this.stopFacePreview();
+        void this.stopFacePreview();
       }
       const parent: FlowPage | null = this.getParentPage(this.flowPage);
       if (parent !== null) {
@@ -3271,7 +3271,7 @@ struct Index {
   }
 
   private returnFromFaceFlow(): void {
-    this.stopFacePreview();
+    void this.stopFacePreview();
     this.flowPage = 'main';
     this.faceStageStatus = 'waitingPermission';
   }
@@ -3425,11 +3425,11 @@ struct Index {
     return new Promise<void>(resolve => setTimeout(resolve, ms));
   }
 
-  private stopFacePreview(): void {
+  private async stopFacePreview(): Promise<void> {
     this.previewStartSerial += 1;
     this.cameraPreviewReady = false;
     this.cameraReady = false;
-    FaceCaptureService.releasePreview();
+    await FaceCaptureService.releasePreview();
   }
 
   private currentFaceSurfaceId(): string {
@@ -3493,7 +3493,7 @@ struct Index {
         await this.store.saveFaceProfile(this.currentStudentId, result.profile);
       }
       this.user = this.withFaceState(this.user, true);
-      this.stopFacePreview();
+      await this.stopFacePreview();
       this.flowPage = 'main';
       if (BadgeService.checkFaceEnrolledBadge(this.currentStudentId)) {
         this.toast('解锁勋章：面貌一新');
@@ -3509,7 +3509,13 @@ struct Index {
   }
 
   private async handleFaceStageAction(stage: FlowPage): Promise<void> {
-    if (this.faceStageStatus === 'waitingPermission' || (this.faceStageStatus === 'failed' && !this.cameraReady)) {
+    // 失败状态或初始状态：停止旧预览，重新准备相机
+    if (this.faceStageStatus === 'waitingPermission' || this.faceStageStatus === 'failed') {
+      if (this.cameraReady) {
+        await this.stopFacePreview();
+        // 等待相机资源完全释放，避免与新 session 创建竞争
+        await this.delayMs(500);
+      }
       this.prepareFaceStage(stage);
       return;
     }
@@ -3524,6 +3530,7 @@ struct Index {
     } catch (err) {
       console.error('Index', `faceStageAction ${stage} 异常: ${JSON.stringify(err)}`);
       this.faceStageStatus = 'failed';
+      await this.stopFacePreview();
       if (stage === 'recognition') {
         this.recognitionMessage = '操作异常，请返回重试';
       } else if (stage === 'enroll') {
@@ -3655,6 +3662,7 @@ struct Index {
       if (!capture) {
         this.faceStageStatus = 'failed';
         this.recognitionMessage = '未获取到当前人脸图像，请重试';
+        await this.stopFacePreview();
         return;
       }
       const result = await FaceService.compare(this.currentStudentId, referencePixelMap, capture.pixelMap);
@@ -3662,16 +3670,19 @@ struct Index {
         this.faceStageStatus = 'failed';
         this.recognitionMessage = result.message;
         await this.recordFailedAttendance(result.message, result.method);
+        await this.stopFacePreview();
         return;
       }
       const course = this.activeCourseId.length > 0 ? CourseService.courseById(this.activeCourseId) : CourseService.activeSignCourse(this.records, this.now());
       if (!course) {
         this.toast('当前不在签到时间内');
+        await this.stopFacePreview();
         this.flowPage = 'main';
         return;
       }
       if (AttendanceService.hasSigned(this.records, course.courseId, AttendanceService.dateKey(this.now()))) {
         this.toast('今日该课程已签到');
+        await this.stopFacePreview();
         this.flowPage = 'main';
         return;
       }
@@ -3687,6 +3698,7 @@ struct Index {
         NotificationService.addNotification(this.currentStudentId, failNotif);
         this.refreshNotificationState();
         this.toast(message);
+        await this.stopFacePreview();
         this.flowPage = 'main';
         return;
       }
@@ -3713,6 +3725,7 @@ struct Index {
           await this.store.saveRecords(this.currentStudentId, this.records);
           EntryFormAbility.updateForms(this.store);
           this.toast(message);
+          await this.stopFacePreview();
           this.flowPage = 'main';
           return;
         }
@@ -3747,7 +3760,7 @@ struct Index {
       }
 
       this.activeCourseId = '';
-      this.stopFacePreview();
+      await this.stopFacePreview();
       // 演示模式下：保留 demoCourseCache 以显示签到成功界面，5秒后自动重置为准备签到
       if (this.demoSignMode) {
         this.demoSignCompleted = true;

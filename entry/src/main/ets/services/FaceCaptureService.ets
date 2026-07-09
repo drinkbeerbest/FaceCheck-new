@@ -3,7 +3,7 @@ import image from '@ohos.multimedia.image';
 import camera from '@ohos.multimedia.camera';
 
 const CAPTURE_TIMEOUT_MS = 20000;
-const SURFACE_SETTLE_MS = 150;
+const SURFACE_SETTLE_MS = 300;
 
 export interface CapturedFaceImage {
   buffer: ArrayBuffer;
@@ -53,44 +53,46 @@ export class FaceCaptureService {
   }
 
   static async captureFace(context: common.UIAbilityContext, surfaceId?: string): Promise<CapturedFaceImage | undefined> {
-    if (surfaceId !== undefined) {
-      if (surfaceId.length === 0) {
+    if (surfaceId === undefined || surfaceId.length === 0) {
+      return undefined;
+    }
+    // 调用方（finishEnroll / finishRecognition）在调用前已通过 startFacePreview
+    // 确保 session 处于运行状态。此处不再重复 startPreview，避免：
+    // 1) releasePreview → 重新 open camera → create session → commit → start 的冗余开销
+    // 2) 反复创建/销毁 session 与 PreviewOutput 写帧之间的 native 层资源竞争导致主线程卡死
+    // 防御：若 session 意外未就绪则尝试初始化
+    if (!FaceCaptureService.session) {
+      const ready = await FaceCaptureService.startPreview(context, surfaceId);
+      if (!ready) {
         return undefined;
       }
-      const previewReady = await FaceCaptureService.startPreview(context, surfaceId);
-      if (!previewReady) {
-        return undefined;
-      }
-      // 关键修复：停止预览输出，释放 surface，避免 createPixelMapFromSurface 与
-      // PreviewOutput 写入帧时产生缓冲区竞争导致主线程卡死
-      let wasRunning = false;
+    }
+    // 停止预览输出，释放 surface 写权限，避免 createPixelMapFromSurface
+    // 与 PreviewOutput 写入帧时产生缓冲区竞争
+    try {
+      await FaceCaptureService.session!.stop();
+    } catch (err) {
+      console.error('FaceCaptureService', `停止预览失败，放弃截图: ${JSON.stringify(err)}`);
+      return undefined;
+    }
+    // 等待最后一帧完全落定到 surface 缓冲区（摄像头硬件到 surface 的延迟）
+    await FaceCaptureService.delay(SURFACE_SETTLE_MS);
+
+    try {
+      return await Promise.race([
+        FaceCaptureService.captureFromPreviewSurface(surfaceId),
+        FaceCaptureService.timeout()
+      ]);
+    } finally {
+      // 恢复预览：失败后用户可以重试
       if (FaceCaptureService.session) {
         try {
-          await FaceCaptureService.session.stop();
-          wasRunning = true;
-          // 短暂等待，确保最后一帧完全落定到 surface 缓冲区
-          await FaceCaptureService.delay(SURFACE_SETTLE_MS);
+          await FaceCaptureService.session!.start();
         } catch (err) {
-          // 停止失败也不影响后续流程
-        }
-      }
-      try {
-        return await Promise.race([
-          FaceCaptureService.captureFromPreviewSurface(surfaceId),
-          FaceCaptureService.timeout()
-        ]);
-      } finally {
-        // 恢复预览（以便失败后用户可以重试）
-        if (wasRunning && FaceCaptureService.session) {
-          try {
-            await FaceCaptureService.session.start();
-          } catch (err) {
-            await FaceCaptureService.releasePreview();
-          }
+          await FaceCaptureService.releasePreview();
         }
       }
     }
-    return undefined;
   }
 
   static async releasePreview(): Promise<void> {
